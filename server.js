@@ -15,7 +15,7 @@ const adminNsp = io.of("/admin");
 const PORT = process.env.PORT || 3000;
 
 // --- Global State ---
-const AUCTION_DURATION_SECONDS = 30 * 60; // 30 minutes
+const AUCTION_DURATION_SECONDS = 1 * 60; // 30 minutes
 let AUCTION_END_TIME = null;
 let AUCTION_ACTIVE = false;
 let AUCTION_TIMER_INTERVAL = null;
