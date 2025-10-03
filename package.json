@@ -1,0 +1,13 @@
+{
+  "name": "innovators_gambit_js",
+  "version": "1.0.0",
+  "description": "A real-time startup auction challenge using Node.js and Socket.IO.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}
