@@ -7,15 +7,18 @@
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
     <style>
-        .controls, .monitor { margin-bottom: 30px; padding: 20px; border: 1px solid #112240; border-radius: 8px; }
-        .controls button { padding: 10px 20px; margin-right: 10px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
+        /* Specific Admin Styles */
+        .controls { margin-bottom: 30px; padding: 20px; border-radius: 8px; background-color: #112240; }
+        .controls button { padding: 10px 15px; margin-right: 10px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
         #start-btn { background-color: #00FF00; }
         #stop-btn { background-color: orange; color: white; }
         #reset-btn { background-color: #FF0000; color: white; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #112240; padding: 10px; text-align: left; }
+        th, td { border: 1px solid #0A192F; padding: 10px; text-align: left; background-color: #112240; }
         th { background-color: #FFC72C; color: #0A192F; }
-        .asset-bids-table { margin-top: 10px; font-size: 0.9em; }
+        .tab-content { border: 1px solid #112240; padding: 20px; margin-top: 10px; background-color: #112240; border-radius: 8px; }
+        .crud-form input { margin-right: 10px; padding: 8px; border: 1px solid #CCD6F6; background-color: #0A192F; color: #CCD6F6; border-radius: 4px; }
+        .crud-form button { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -27,52 +30,83 @@
 
     <div class="controls">
         <h2>Auction Controls</h2>
+        <div style="margin-bottom: 15px;">
+            <label for="duration-input" style="margin-right: 10px;">Auction Duration (Minutes):</label>
+            <input type="number" id="duration-input" value="30" min="1" style="width: 80px;" onchange="updateDuration()">
+        </div>
+        
         <form method="POST" action="/admin_action" style="display: inline;">
-            <input type="hidden" name="pass" value="admin123"> 
-            <button type="submit" name="action" value="start_auction" id="start-btn">
-                START 30 MINUTE AUCTION
-            </button>
-            <button type="button" id="stop-btn" onclick="forceStopAuction()">
-                FORCE STOP & RESOLVE
-            </button>
-            <button type="submit" name="action" value="reset_auction" id="reset-btn">
-                RESET ALL (Teams & Assets)
-            </button>
+            <input type="hidden" name="action" value="start_auction">
+            <button type="submit" id="start-btn">START AUCTION</button>
         </form>
+        
+        <button type="button" id="stop-btn" onclick="forceStopAuction()">FORCE STOP & RESOLVE</button>
+        
+        <form method="POST" action="/admin_action" style="display: inline;">
+            <input type="hidden" name="action" value="reset_all">
+            <button type="submit" id="reset-btn">RESET ALL & SAVE GAME</button>
+        </form>
+        <p style="margin-top: 15px; font-size: 0.9em; color: #CCD6F6;">* 'Reset All' saves the current game as history, clears assets, and resets team VC for a new round.</p>
     </div>
 
-    <div class="monitor">
+    <div class="tabs" style="margin-bottom: 20px;">
+        <button class="active" onclick="showAdminTab('monitor-tab', this)">Live Monitor</button>
+        <button onclick="showAdminTab('assets-tab', this)">Asset Management</button>
+        <button onclick="showAdminTab('teams-tab', this)">Team Management</button>
+        <button onclick="showAdminTab('history-tab', this)">Game History</button>
+    </div>
+
+    <div id="monitor-tab" class="tab-content">
         <h2>Live Bid Monitor</h2>
         <table id="asset-monitor">
-            <thead>
-                <tr>
-                    <th>Asset Name</th>
-                    <th>Min Bid</th>
-                    <th>Total Bidders</th>
-                    <th>Highest Bid</th>
-                    <th>Winner (Final Price)</th>
-                </tr>
-            </thead>
-            <tbody>
-                </tbody>
+            <thead><tr><th>Asset Name</th><th>Min Bid</th><th>Total Bidders</th><th>Highest Bid</th><th>Winner (Final Price)</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        
+        <h2>Team Status</h2>
+        <table id="team-status-table">
+            <thead><tr><th>ID</th><th>Name</th><th>VC Balance</th><th>Assets Won</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div id="assets-tab" class="tab-content" style="display: none;">
+        <h2>Add New Asset</h2>
+        <form id="add-asset-form" class="crud-form" onsubmit="handleAssetSubmit(event, 'add')">
+            <input type="text" name="name" placeholder="Name" required>
+            <input type="text" name="category" placeholder="Category" required style="width: 100px;">
+            <input type="number" name="min_bid" placeholder="Min Bid (VC)" required style="width: 120px;">
+            <button type="submit" style="background-color: #00FF00;">Add Asset</button>
+        </form>
+        <h2 style="margin-top: 20px;">Current Assets</h2>
+        <table id="current-assets-table">
+            <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Min Bid</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div id="teams-tab" class="tab-content" style="display: none;">
+        <h2>Add New Team</h2>
+        <form id="add-team-form" class="crud-form" onsubmit="handleTeamSubmit(event, 'add')">
+            <input type="text" name="name" placeholder="Team Name" required>
+            <input type="text" name="username" placeholder="Username" required style="width: 100px;">
+            <input type="text" name="password" placeholder="Password" required style="width: 100px;">
+            <button type="submit" style="background-color: #00FF00;">Add Team</button>
+        </form>
+        <h2 style="margin-top: 20px;">Registered Teams (Login: Username/Password)</h2>
+        <table id="current-teams-table">
+            <thead><tr><th>ID</th><th>Name</th><th>VC Start</th><th>Username</th><th>Password</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
         </table>
     </div>
     
-    <div class="monitor">
-        <h2>Team Status</h2>
-        <table id="team-status-table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>VC Balance</th>
-                    <th>Assets Won</th>
-                </tr>
-            </thead>
-            <tbody>
-                </tbody>
-        </table>
+    <div id="history-tab" class="tab-content" style="display: none;">
+        <h2>Game History</h2>
+        <ul id="history-list">
+            <li>Loading...</li>
+        </ul>
     </div>
+
 
     <script>
         const socket = io('/admin');
@@ -81,22 +115,56 @@
         const AUCTION_STATUS_EL = document.getElementById('auction-status');
         const TIMER_EL = document.getElementById('timer');
         const START_BTN = document.getElementById('start-btn');
-        const STOP_BTN = document.getElementById('stop-btn'); // NEW ELEMENT
+        const STOP_BTN = document.getElementById('stop-btn');
+        const DURATION_INPUT = document.getElementById('duration-input');
         const ASSET_MONITOR_BODY = document.querySelector('#asset-monitor tbody');
         const TEAM_STATUS_BODY = document.querySelector('#team-status-table tbody');
-        
+        const ASSET_CRUD_BODY = document.querySelector('#current-assets-table tbody');
+        const TEAM_CRUD_BODY = document.querySelector('#current-teams-table tbody');
+        const HISTORY_LIST = document.getElementById('history-list');
+
         // --- Global State ---
         let assetCatalog = {};
         let teams = {};
         
         const formatVC = (amount) => `$${amount.toLocaleString()}`;
 
-        // --- Core Functions ---
+        // --- UI Control Functions ---
+
+        function showAdminTab(id, button) {
+            document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.tabs button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(id).style.display = 'block';
+            if (button) button.classList.add('active');
+        }
 
         function updateButtonStates(isActive) {
             START_BTN.disabled = isActive;
             STOP_BTN.disabled = !isActive;
+            DURATION_INPUT.disabled = isActive;
             AUCTION_STATUS_EL.textContent = isActive ? 'LIVE' : 'CLOSED';
+        }
+
+        // --- Data Rendering Functions ---
+        
+        function renderHistory(history) {
+             HISTORY_LIST.innerHTML = '';
+             if (history.length === 0) {
+                 HISTORY_LIST.innerHTML = '<li>No previous games saved.</li>';
+                 return;
+             }
+             history.reverse().forEach(game => {
+                 const winnerTeams = Object.values(game.assets).filter(a => a.winner && a.winner !== 'VOID (Budget Fail)' && a.winner !== 'NO_WINNER').map(a => a.winner).reduce((acc, teamId) => { acc[teamId] = (acc[teamId] || 0) + 1; return acc; }, {});
+                 const winnersSummary = Object.entries(winnerTeams).sort((a,b) => b[1] - a[1]).map(([id, count]) => `${game.teams[id].name}: ${count}`).join(', ') || 'No successful bids';
+                 
+                 HISTORY_LIST.innerHTML += `
+                    <li>
+                        <strong>Game #${game.gameId}</strong> (${new Date(game.date).toLocaleDateString()} - ${game.duration / 60} mins)
+                        <br>
+                        Winning Teams: ${winnersSummary}
+                    </li>
+                 `;
+             });
         }
         
         function renderAssetMonitor() {
@@ -104,17 +172,14 @@
             for (const id in assetCatalog) {
                 const asset = assetCatalog[id];
                 const bidCount = Object.keys(asset.current_bids).length;
-                
-                const highestBid = bidCount > 0 ? 
-                    Math.max(...Object.values(asset.current_bids)) : 0;
+                const highestBid = bidCount > 0 ? Math.max(...Object.values(asset.current_bids)) : 0;
                 
                 let winnerText = (asset.winner && AUCTION_STATUS_EL.textContent !== 'LIVE') ? 
                     `${asset.winner} (${formatVC(asset.final_price)})` : 
                     '--';
 
                 const row = ASSET_MONITOR_BODY.insertRow();
-                row.id = `asset-row-${id}`;
-                
+                row.id = `monitor-row-${id}`;
                 row.innerHTML = `
                     <td>${asset.name}</td>
                     <td>${formatVC(asset.min_bid)}</td>
@@ -130,20 +195,155 @@
              for (const id in teams) {
                 const team = teams[id];
                 const row = TEAM_STATUS_BODY.insertRow();
-                row.id = `team-row-${id}`;
+                row.id = `status-row-${id}`;
                 row.innerHTML = `
-                    <td>${team.id}</td>
+                    <td>${team.id.substring(0, 4)}...</td>
                     <td>${team.name}</td>
                     <td>${formatVC(team.vc)}</td>
                     <td>${team.assets_won.length} items</td>
                 `;
              }
         }
+        
+        function renderAssetCRUD() {
+            ASSET_CRUD_BODY.innerHTML = '';
+            for (const id in assetCatalog) {
+                const asset = assetCatalog[id];
+                const row = ASSET_CRUD_BODY.insertRow();
+                row.innerHTML = `
+                    <td>${id.substring(0, 4)}...</td>
+                    <td><input type="text" id="asset-name-${id}" value="${asset.name}" style="width:100px;"></td>
+                    <td><input type="text" id="asset-cat-${id}" value="${asset.category}" style="width:80px;"></td>
+                    <td><input type="number" id="asset-bid-${id}" value="${asset.min_bid}" style="width:80px;"></td>
+                    <td>
+                        <button onclick="handleAssetSubmit(event, 'update', '${id}')" style="background-color: blue; color:white;">Update</button>
+                        <button onclick="handleAssetSubmit(event, 'delete', '${id}')" style="background-color: red; color:white;">Delete</button>
+                    </td>
+                `;
+            }
+        }
 
-        // --- NEW FUNCTION TO STOP THE AUCTION ---
+        function renderTeamCRUD() {
+            TEAM_CRUD_BODY.innerHTML = '';
+            for (const id in teams) {
+                const team = teams[id];
+                const row = TEAM_CRUD_BODY.insertRow();
+                row.innerHTML = `
+                    <td>${id.substring(0, 4)}...</td>
+                    <td><input type="text" id="team-name-${id}" value="${team.name}" style="width:100px;"></td>
+                    <td>${formatVC(500000)}</td>
+                    <td><input type="text" id="team-user-${id}" value="${team.username}" style="width:80px;"></td>
+                    <td><input type="text" id="team-pass-${id}" value="${team.password}" style="width:80px;"></td>
+                    <td>
+                        <button onclick="handleTeamSubmit(event, 'update', '${id}')" style="background-color: blue; color:white;">Update</button>
+                        <button onclick="handleTeamSubmit(event, 'delete', '${id}')" style="background-color: red; color:white;">Delete</button>
+                    </td>
+                `;
+            }
+        }
+
+
+        // --- CRUD Handlers ---
+
+        async function fetchAdminState() {
+            const response = await fetch('/api/admin/state');
+            const state = await response.json();
+            
+            assetCatalog = state.assets;
+            teams = state.teams;
+            
+            DURATION_INPUT.value = state.duration;
+            
+            updateButtonStates(state.active);
+            renderAssetMonitor();
+            renderTeamStatus();
+            renderAssetCRUD();
+            renderTeamCRUD();
+            renderHistory(state.history);
+        }
+
+        async function handleAssetSubmit(event, action, id = null) {
+            event.preventDefault();
+            
+            let data = { action: action, id: id };
+            
+            if (action === 'add') {
+                 data.name = document.querySelector('#add-asset-form input[name="name"]').value;
+                 data.category = document.querySelector('#add-asset-form input[name="category"]').value;
+                 data.min_bid = document.querySelector('#add-asset-form input[name="min_bid"]').value;
+            } else if (action === 'update') {
+                 data.name = document.getElementById(`asset-name-${id}`).value;
+                 data.category = document.getElementById(`asset-cat-${id}`).value;
+                 data.min_bid = document.getElementById(`asset-bid-${id}`).value;
+            } else if (action === 'delete' && !confirm('Are you sure you want to delete this asset?')) {
+                 return;
+            }
+
+            const response = await fetch('/api/admin/asset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await response.json();
+            if (result.success) {
+                fetchAdminState();
+                if (action === 'add') document.getElementById('add-asset-form').reset();
+            } else {
+                alert('Error processing asset request: ' + result.error);
+            }
+        }
+        window.handleAssetSubmit = handleAssetSubmit; // Make globally accessible
+
+        async function handleTeamSubmit(event, action, id = null) {
+            event.preventDefault();
+            
+            let data = { action: action, id: id };
+            
+            if (action === 'add') {
+                 data.name = document.querySelector('#add-team-form input[name="name"]').value;
+                 data.username = document.querySelector('#add-team-form input[name="username"]').value;
+                 data.password = document.querySelector('#add-team-form input[name="password"]').value;
+            } else if (action === 'update') {
+                 data.name = document.getElementById(`team-name-${id}`).value;
+                 data.username = document.getElementById(`team-user-${id}`).value;
+                 data.password = document.getElementById(`team-pass-${id}`).value;
+            } else if (action === 'delete' && !confirm('Are you sure you want to delete this team?')) {
+                 return;
+            }
+
+            const response = await fetch('/api/admin/team', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await response.json();
+            if (result.success) {
+                fetchAdminState();
+                if (action === 'add') document.getElementById('add-team-form').reset();
+            } else {
+                alert('Error processing team request: ' + result.error);
+            }
+        }
+        window.handleTeamSubmit = handleTeamSubmit; // Make globally accessible
+
+        // --- Auction Control Handlers ---
+
+        window.updateDuration = async () => {
+            const durationMinutes = DURATION_INPUT.value;
+            const form = new URLSearchParams();
+            form.append('action', 'set_duration');
+            form.append('duration_minutes', durationMinutes);
+
+            await fetch('/admin_action', {
+                method: 'POST',
+                body: form
+            });
+            // State will be updated on the next socket update or page load
+        };
+        
         window.forceStopAuction = () => {
             if (confirm("Are you sure you want to STOP the auction immediately and resolve the winners based on current bids?")) {
-                STOP_BTN.disabled = true; // Disable to prevent double-click
+                STOP_BTN.disabled = true;
                 socket.emit('force_stop_auction');
             }
         };
@@ -151,18 +351,7 @@
         // --- Socket.IO Event Handlers ---
 
         socket.on('initial_admin_state', (state) => {
-            assetCatalog = state.assets;
-            teams = state.teams;
-            updateButtonStates(state.active);
-            renderAssetMonitor();
-            renderTeamStatus();
-            
-            // Set initial timer value if live
-            if (state.active) {
-                 const minutes = Math.floor(state.timeLeft / 60);
-                 const seconds = state.timeLeft % 60;
-                 TIMER_EL.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-            }
+            // Note: Initial state is handled by the fetchAdminState() for complexity
         });
 
         socket.on('timer_update', (data) => {
@@ -176,7 +365,6 @@
             for(const assetId in updates) {
                 assetCatalog[assetId].current_bids = updates[assetId].current_bids;
             }
-            // Only re-render the monitor for live updates
             renderAssetMonitor();
         });
 
@@ -189,7 +377,6 @@
             updateButtonStates(false);
             assetCatalog = assetResults;
             renderAssetMonitor();
-            // Note: Team update (VC/Assets Won) happens via 'admin_update_teams'
         });
 
         socket.on('admin_update_teams', (teamsData) => {
@@ -198,21 +385,22 @@
         });
 
         socket.on('auction_reset', () => {
-             window.location.reload(); 
+             fetchAdminState(); // Refresh all CRUD lists and history
         });
 
         socket.on('admin_action_response', (data) => {
-             if (data.success) {
-                 console.log(data.message);
-             } else {
+             if (!data.success) {
                  alert(data.message);
                  // If stop failed, re-enable the button
                  updateButtonStates(true);
              }
         });
 
-        // Initialization (set initial state on load)
-        updateButtonStates(false); 
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            showAdminTab('monitor-tab', document.querySelector('.tabs button'));
+            fetchAdminState();
+        });
     </script>
 </body>
 </html>

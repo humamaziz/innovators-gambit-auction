@@ -6,11 +6,38 @@
     <title>Innovator's Gambit: Bidding Floor</title>
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
+    <style>
+        .tabs button {
+            background-color: #112240;
+            color: #FFC72C;
+            border: 1px solid #FFC72C;
+            padding: 10px 20px;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+        .tabs button:hover {
+            background-color: #0A192F;
+        }
+        .tabs button.active {
+            background-color: #FFC72C;
+            color: #0A192F;
+        }
+        #assets-section ul {
+            list-style: none;
+            padding: 0;
+        }
+        #assets-section li {
+            background-color: #112240;
+            padding: 10px;
+            margin-bottom: 5px;
+            border-left: 5px solid #E84A5F;
+        }
+    </style>
 </head>
 <body>
 
     <header class="gold-rush-theme">
-        <h1 class="event-title">Innovator's Gambit: Live Bidding</h1>
+        <h1 class="event-title">Innovator's Gambit: Bidding Floor</h1>
         <div id="team-info">
             <span id="team-name">Loading...</span> | 
             <span id="vc-balance">$VC 0</span>
@@ -20,80 +47,121 @@
     <div style="padding: 20px;">
         <h2 style="color: #E84A5F;">Time Remaining: <span id="timer">--:--</span></h2>
         <div id="status-message">Connecting...</div>
+
+        <div class="tabs">
+            <button id="tab-bidding" class="active" onclick="showSection('bidding')">Live Bidding</button>
+            <button id="tab-assets" onclick="showSection('assets')">My Assets</button>
+        </div>
     </div>
     
-    <div id="assets-display" class="item-list">
-        </div>
+    <section id="bidding-section" class="item-list">
+        </section>
+    
+    <section id="assets-section" style="display: none; padding: 30px;">
+        <h2>Assets Won (Day 2 Pitch Materials)</h2>
+        <ul id="my-assets-list">
+            <li>Loading...</li>
+        </ul>
+        <p style="font-weight: bold; margin-top: 15px;">Total Assets Cost: <span id="my-assets-total">$VC 0</span></p>
+    </section>
 
     <script>
-        // Get the Team ID from the URL (e.g., ?team=T1)
-        const urlParams = new URLSearchParams(window.location.search);
-        const TEAM_ID = urlParams.get('team');
+        // Global variables updated by the server
+        let TEAM_ID = null;
+        let teamData = {};
+        let assetCatalog = {};
+        let auctionActive = false;
         
         // --- DOM Elements ---
         const VC_BALANCE_EL = document.getElementById('vc-balance');
         const TEAM_NAME_EL = document.getElementById('team-name');
         const TIMER_EL = document.getElementById('timer');
         const STATUS_MSG_EL = document.getElementById('status-message');
-        const ASSETS_DISPLAY_EL = document.getElementById('assets-display');
+        const ASSETS_DISPLAY_EL = document.getElementById('bidding-section'); // Updated ID
+        const MY_ASSETS_LIST_EL = document.getElementById('my-assets-list');
+        const MY_ASSETS_TOTAL_EL = document.getElementById('my-assets-total');
         
-        // --- Global State ---
-        let teamData = {};
-        let assetCatalog = {};
-        let auctionActive = false;
-        
-        const socket = io(); // Connect to the default namespace
+        const socket = io();
 
         // --- Core Functions ---
 
         const formatVC = (amount) => `$VC ${amount.toLocaleString()}`;
         
-        function updateTeamDisplay() {
-            if (teamData.name) {
-                TEAM_NAME_EL.textContent = `Team: ${teamData.name}`;
-                VC_BALANCE_EL.textContent = formatVC(teamData.vc);
-            }
+        function showSection(id) {
+            document.getElementById('bidding-section').style.display = 'none';
+            document.getElementById('assets-section').style.display = 'none';
+            
+            document.getElementById(`tab-bidding`).classList.remove('active');
+            document.getElementById(`tab-assets`).classList.remove('active');
+            
+            document.getElementById(`${id}-section`).style.display = 'grid';
+            document.getElementById(`tab-${id}`).classList.add('active');
+        }
+
+        function updateTeamDisplay(team) {
+            teamData = team;
+            TEAM_NAME_EL.textContent = `Team: ${team.name}`;
+            VC_BALANCE_EL.textContent = formatVC(team.vc);
+            
+            // Re-render my assets list
+            renderMyAssets();
         }
         
+        function renderMyAssets() {
+            let totalCost = 0;
+            MY_ASSETS_LIST_EL.innerHTML = ''; 
+            
+            if (teamData.assets_won.length > 0) {
+                teamData.assets_won.forEach(asset => {
+                    MY_ASSETS_LIST_EL.innerHTML += `<li>${asset.name} - ${formatVC(asset.cost)}</li>`;
+                    totalCost += asset.cost;
+                });
+            } else {
+                MY_ASSETS_LIST_EL.innerHTML = '<li>No assets won yet. Bid now!</li>';
+            }
+            MY_ASSETS_TOTAL_EL.textContent = formatVC(totalCost);
+        }
+
         function renderAssetCards() {
             ASSETS_DISPLAY_EL.innerHTML = '';
             for (const id in assetCatalog) {
                 const asset = assetCatalog[id];
-                // Get the team's bid, defaulting to 0
                 const teamBid = asset.current_bids[TEAM_ID] || 0;
                 
                 const card = document.createElement('div');
                 card.className = 'item-card';
-                card.innerHTML = `
-                    <h3>${asset.name} (${asset.category})</h3>
-                    <p>Min Bid: ${formatVC(asset.min_bid)}</p>
-                    <p>Description: The asset's strategic value.</p>
-                    <div class="bid-section">
+                
+                let bidControlsHTML = '';
+                if (auctionActive) {
+                     bidControlsHTML = `
                         <label for="bid-${id}">Your Current Bid:</label>
-                        <input type="number" id="bid-${id}" value="${teamBid}" min="${asset.min_bid}" ${auctionActive ? '' : 'disabled'}>
-                        <button onclick="placeBid('${id}')" ${auctionActive ? '' : 'disabled'}>
+                        <input type="number" id="bid-${id}" value="${teamBid}" min="${asset.min_bid}">
+                        <button onclick="placeBid('${id}')">
                             ${teamBid > 0 ? 'Update Bid' : 'Place Bid'}
                         </button>
                         <div class="bid-status" id="status-${id}">
                             ${teamBid > 0 ? `Bid recorded: ${formatVC(teamBid)}` : 'No bid recorded.'}
                         </div>
-                    </div>
-                `;
-                
-                // Show winner/price after the auction ends
-                if (asset.winner) {
-                    const winnerText = asset.winner === TEAM_ID ? 
+                    `;
+                } else if (asset.winner) {
+                     const winnerText = asset.winner === TEAM_ID ? 
                         `<span class="winner" style="color: #00FF00;">YOU WON!</span> for ${formatVC(asset.final_price)}` : 
                         asset.winner === 'VOID (Budget Fail)' ?
-                        `<span style="color: orange;">Winner VOIDED.</span>` :
+                        `<span style="color: orange; font-weight: bold;">VOID (Budget Fail)</span>` :
                         `Won by ${asset.winner} for ${formatVC(asset.final_price)}`;
                     
-                    card.querySelector('.bid-section').innerHTML = `
-                        <p class="winner" style="color: #FFC72C; font-weight: bold;">AUCTION RESULT:</p>
-                        <p>${winnerText}</p>
-                    `;
+                    bidControlsHTML = `<p style="color: #FFC72C; font-weight: bold;">AUCTION RESULT:</p><p>${winnerText}</p>`;
+                } else {
+                    bidControlsHTML = `<div class="bid-status">Auction is CLOSED.</div>`;
                 }
-                
+
+
+                card.innerHTML = `
+                    <h3>${asset.name} (${asset.category})</h3>
+                    <p>Min Bid: ${formatVC(asset.min_bid)}</p>
+                    <p>Description: Strategic value details for pitching.</p>
+                    <div class="bid-section">${bidControlsHTML}</div>
+                `;
                 ASSETS_DISPLAY_EL.appendChild(card);
             }
         }
@@ -102,19 +170,14 @@
             const input = document.getElementById(`bid-${assetId}`);
             const bidAmount = parseInt(input.value);
 
-            if (!auctionActive) {
-                alert('Auction is not currently active!');
-                return;
-            }
+            if (!auctionActive) { return; }
 
-            if (isNaN(bidAmount)) {
-                alert('Please enter a valid number.');
+            if (isNaN(bidAmount) || bidAmount < assetCatalog[assetId].min_bid) {
+                alert(`Bid for ${assetCatalog[assetId].name} must be a valid number and at least ${formatVC(assetCatalog[assetId].min_bid)}.`);
                 return;
             }
             
-            // Send the bid to the server
             socket.emit('place_bid', {
-                teamId: TEAM_ID,
                 assetId: assetId,
                 bidAmount: bidAmount
             });
@@ -123,18 +186,15 @@
         // --- Socket.IO Event Handlers ---
         
         socket.on('initial_state', (state) => {
-            if (state.teams[TEAM_ID]) {
-                teamData = state.teams[TEAM_ID];
-                assetCatalog = state.assets;
-                auctionActive = state.active;
-                
-                updateTeamDisplay();
-                renderAssetCards();
-                
-                STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Waiting for Admin.';
-            } else {
-                STATUS_MSG_EL.textContent = 'Error: Invalid team data received.';
-            }
+            TEAM_ID = state.teamId;
+            teamData = state.teamData || {}; // Set team data on load
+            assetCatalog = state.assets;
+            auctionActive = state.active;
+            
+            updateTeamDisplay(teamData);
+            renderAssetCards();
+            
+            STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Review results and assets.';
         });
 
         socket.on('timer_update', (data) => {
@@ -148,7 +208,6 @@
             const statusEl = document.getElementById(`status-${data.assetId}`);
             if (data.success) {
                 statusEl.innerHTML = `<span style="color: #00FF00;">✅ ${data.message}</span>`;
-                // Update local bid state and button text
                 assetCatalog[data.assetId].current_bids[TEAM_ID] = data.newBid;
                 document.querySelector(`#bid-${data.assetId}`).nextElementSibling.textContent = 'Update Bid';
             } else {
@@ -159,16 +218,23 @@
         socket.on('auction_finished', (assetResults) => {
             auctionActive = false;
             STATUS_MSG_EL.textContent = 'AUCTION ENDED! Review your asset portfolio for Day 2.';
-            // Disable all bidding inputs/buttons
-            document.querySelectorAll('.item-card button, .item-card input').forEach(el => el.disabled = true);
-            
             assetCatalog = assetResults;
             renderAssetCards(); 
+            // The server will send a subsequent 'team_update' to refresh VC/Assets Won
+        });
+
+        socket.on('team_update', (updatedTeamData) => {
+             // This is used to update the VC and Assets Won immediately after resolution
+             updateTeamDisplay(updatedTeamData);
         });
 
         socket.on('auction_reset', () => {
-             // Reload the page to get the fresh state from the server
              window.location.reload(); 
+        });
+        
+        // Initial setup to display bidding floor
+        document.addEventListener('DOMContentLoaded', () => {
+            showSection('bidding');
         });
 
     </script>
