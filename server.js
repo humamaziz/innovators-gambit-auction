@@ -193,19 +193,30 @@ function resetLiveGameState() {
 }
 
 
+// server.js (Around line 160)
+
 // --- Express Routing (Auth, Static Files, Admin Actions) ---
+
+// Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Participant & Admin Login
+// --- Participant & Admin Login/Root Route ---
+
 app.get('/', (req, res) => {
-    if (req.session.teamId) {
-        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
-    }
+    // 1. Check if the user is authenticated as an Admin
     if (req.session.isAdmin) {
         return res.redirect('/admin_panel');
     }
+
+    // 2. Check if the user is authenticated as a Team
+    if (req.session.teamId) {
+        // If authenticated, serve the bidding page (index.html)
+        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    }
+
+    // 3. If NOT authenticated as either, serve the login page
     return res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
