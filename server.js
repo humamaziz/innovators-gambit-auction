@@ -7,7 +7,7 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 
-// Use two namespaces: one for participants, one for the secure admin panel
+// Use two namespaces for security and clarity
 const io = socketio(server);
 const participantNsp = io.of("/");
 const adminNsp = io.of("/admin");
@@ -20,7 +20,7 @@ let AUCTION_END_TIME = null;
 let AUCTION_ACTIVE = false;
 let AUCTION_TIMER_INTERVAL = null;
 
-// Initial Data (Admin can modify/add)
+// Initial Data
 const ASSET_CATALOG = {
     "A1": { id: "A1", name: "Enterprise Cloud Server", category: "Tech", min_bid: 100000, current_bids: {}, winner: null, final_price: 0},
     "A2": { id: "A2", name: "Social Media Influencer Pack", category: "Marketing", min_bid: 50000, current_bids: {}, winner: null, final_price: 0},
@@ -43,15 +43,19 @@ function getRemainingTime() {
 }
 
 function startTimer() {
-    if (AUCTION_TIMER_INTERVAL) return; // Prevent multiple timers
+    if (AUCTION_TIMER_INTERVAL) return;
     
     AUCTION_END_TIME = Date.now() + AUCTION_DURATION_SECONDS * 1000;
     AUCTION_ACTIVE = true;
     
+    // Broadcast start event and initial time
+    const initialTimeLeft = getRemainingTime();
+    participantNsp.emit('auction_start', { active: AUCTION_ACTIVE, endTime: AUCTION_END_TIME });
+    adminNsp.emit('auction_start', { active: AUCTION_ACTIVE, timeLeft: initialTimeLeft });
+    
     AUCTION_TIMER_INTERVAL = setInterval(() => {
         const timeLeft = getRemainingTime();
         
-        // Broadcast time to all clients
         participantNsp.emit('timer_update', { timeLeft: timeLeft });
         adminNsp.emit('timer_update', { timeLeft: timeLeft });
         
@@ -65,14 +69,19 @@ function startTimer() {
 }
 
 function resolveAuction() {
+    // 1. Clear any running timer (should already be cleared by calling function, but safety check)
+    if (AUCTION_TIMER_INTERVAL) {
+        clearInterval(AUCTION_TIMER_INTERVAL);
+        AUCTION_TIMER_INTERVAL = null;
+    }
+
     const winningBids = {};
 
-    // 1. Determine winners for each item
+    // 2. Determine winners for each item
     for (const assetId in ASSET_CATALOG) {
         const asset = ASSET_CATALOG[assetId];
         let validBids = {};
         
-        // Filter out invalid bids and prepare for winner selection
         for (const teamId in asset.current_bids) {
             const bid = asset.current_bids[teamId];
             if (bid >= asset.min_bid && bid <= TEAMS[teamId].vc) {
@@ -81,7 +90,6 @@ function resolveAuction() {
         }
         
         if (Object.keys(validBids).length > 0) {
-            // Find the highest bid (simple max function)
             const winnerId = Object.keys(validBids).reduce((a, b) => validBids[a] > validBids[b] ? a : b);
             const finalPrice = validBids[winnerId];
 
@@ -94,10 +102,11 @@ function resolveAuction() {
             winningBids[winnerId].push({ assetId: assetId, price: finalPrice });
         } else {
             asset.winner = "NO_WINNER";
+            asset.final_price = 0;
         }
     }
 
-    // 2. Process all winning bids and deduct VC (Budget Constraint Check)
+    // 3. Process winning bids and deduct VC (Budget Constraint Check)
     for (const teamId in winningBids) {
         const team = TEAMS[teamId];
         const totalCost = winningBids[teamId].reduce((sum, win) => sum + win.price, 0);
@@ -112,7 +121,7 @@ function resolveAuction() {
                 });
             }
         } else {
-            // Team cannot afford total cost: ALL wins are voided (enforces budget discipline)
+            // Team cannot afford total cost: ALL wins are voided
             console.log(`Team ${teamId} failed budget check: VC ${team.vc} < Cost ${totalCost}. Voiding all wins.`);
             for (const win of winningBids[teamId]) {
                 ASSET_CATALOG[win.assetId].winner = "VOID (Budget Fail)";
@@ -121,7 +130,7 @@ function resolveAuction() {
         }
     }
 
-    // 3. Broadcast final results and update admin panel
+    // 4. Broadcast final results and team updates
     participantNsp.emit('auction_finished', ASSET_CATALOG);
     adminNsp.emit('auction_finished', ASSET_CATALOG);
     adminNsp.emit('admin_update_teams', TEAMS);
@@ -135,43 +144,41 @@ function resetAuction() {
         AUCTION_TIMER_INTERVAL = null;
     }
     
-    // Hard reset state (revert to initial state)
+    // Hard reset state
     for (const id in ASSET_CATALOG) {
         ASSET_CATALOG[id].current_bids = {};
         ASSET_CATALOG[id].winner = null;
         ASSET_CATALOG[id].final_price = 0;
     }
     for (const id in TEAMS) {
-        TEAMS[id].vc = 500000; // Reset VC
+        TEAMS[id].vc = 500000;
         TEAMS[id].assets_won = [];
     }
 
-    // Notify all clients
+    // Notify all clients to reset
     participantNsp.emit('auction_reset');
     adminNsp.emit('auction_reset');
 }
 
 
-// --- Express Routing (Serving Static Files and Basic Auth) ---
+// --- Express Routing ---
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.urlencoded({ extended: true }));
 
-// Participant View
+// Participant View (Index)
 app.get('/', (req, res) => {
     // Basic "authentication" for teams via query parameter
     const teamId = req.query.team || 'T1'; 
     if (!TEAMS[teamId]) {
-        return res.status(404).send("Invalid Team ID.");
+        // Send a custom HTML error page or redirect
+        return res.status(404).sendFile(path.join(__dirname, 'public', '404.html')); 
     }
-    
-    // Pass initial state to the client side
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Admin View
 app.get('/admin_panel', (req, res) => {
-    // --- SIMPLE MOCK ADMIN AUTHENTICATION ---
-    if (req.query.pass !== 'admin123') { // Replace 'admin123' with a real, secure password check
+    if (req.query.pass !== 'admin123') { // MOCK AUTH
         return res.status(403).send("Unauthorized Access. Passcode Required.");
     }
     res.sendFile(path.join(__dirname, 'public', 'admin.html'));
@@ -179,7 +186,7 @@ app.get('/admin_panel', (req, res) => {
 
 // Admin Post Requests (for Start/Reset)
 app.post('/admin_action', (req, res) => {
-    if (req.body.pass !== 'admin123') { // Re-check password
+    if (req.body.pass !== 'admin123') { // MOCK AUTH
         return res.status(403).send("Unauthorized Action.");
     }
     
@@ -191,17 +198,17 @@ app.post('/admin_action', (req, res) => {
         resetAuction();
     }
     
-    res.redirect('/admin_panel?pass=admin123'); // Redirect back to the admin panel
+    res.redirect('/admin_panel?pass=admin123');
 });
 
 
-// --- Socket.IO Handlers (Real-time Communication) ---
+// --- Socket.IO Handlers ---
 
 // Participant Namespace
 participantNsp.on('connection', (socket) => {
     console.log(`Participant connected: ${socket.id}`);
     
-    // Send initial state to the newly connected participant
+    // Send initial state
     socket.emit('initial_state', {
         teams: TEAMS, 
         assets: ASSET_CATALOG, 
@@ -230,8 +237,6 @@ participantNsp.on('connection', (socket) => {
             return;
         }
         
-        // Note: We only check if the bid is <= current VC. 
-        // The total affordability check happens only at auction resolution.
         if (bid > team.vc) {
              socket.emit('bid_response', { success: false, message: `Bid of $${bid.toLocaleString()} VC exceeds your current VC balance.` });
              return;
@@ -248,18 +253,26 @@ participantNsp.on('connection', (socket) => {
             newBid: bid 
         });
         
-        // Notify the Admin that bids have changed
+        // Notify the Admin
         adminNsp.emit('admin_update_bids', { [assetId]: asset });
     });
 });
 
 // Admin Namespace
 adminNsp.on('connection', (socket) => {
-    // server.js (New code to add inside the adminNsp.on('connection', (socket) => { ... }) block)
+    console.log(`Admin connected: ${socket.id}`);
+    
+    // Send full, current state to the admin upon connection
+    socket.emit('initial_admin_state', {
+        teams: TEAMS, 
+        assets: ASSET_CATALOG, 
+        active: AUCTION_ACTIVE, 
+        timeLeft: getRemainingTime() 
+    });
 
+    // --- NEW HANDLER FOR ADMIN FORCE STOP ---
     socket.on('force_stop_auction', () => {
         if (!AUCTION_ACTIVE) {
-            console.log("Admin attempted to stop inactive auction.");
             socket.emit('admin_action_response', { success: false, message: 'Auction is already stopped or finished.' });
             return;
         }
@@ -273,8 +286,6 @@ adminNsp.on('connection', (socket) => {
         // 2. Set the end time to now (or just slightly in the past)
         AUCTION_END_TIME = Date.now() - 1000; 
         AUCTION_ACTIVE = false;
-
-        console.log("Admin forced auction stop. Resolving results now.");
         
         // 3. Resolve the auction and broadcast results
         resolveAuction(); 
@@ -290,64 +301,3 @@ server.listen(PORT, () => {
     console.log(`Admin Panel: http://localhost:${PORT}/admin_panel?pass=admin123`);
     console.log(`Team T1: http://localhost:${PORT}/?team=T1`);
 });
-
-// public/admin.html: Inside the <script> block
-
-        // --- DOM Elements (Add the new button) ---
-        const STOP_BTN = document.getElementById('stop-btn');
-        // ... (other DOM elements)
-
-        // --- Core Functions (Update renderAssetMonitor) ---
-        function renderAssetMonitor() {
-            // ... (existing code)
-            
-            // Re-check button state after rendering to account for initial load/reset
-            AUCTION_STATUS_EL.textContent === 'LIVE' ? START_BTN.disabled = true : START_BTN.disabled = false;
-            AUCTION_STATUS_EL.textContent === 'LIVE' ? STOP_BTN.disabled = false : STOP_BTN.disabled = true;
-
-            // ... (rest of the function)
-        }
-        
-        // --- NEW FUNCTION TO STOP THE AUCTION ---
-        window.forceStopAuction = () => {
-            if (confirm("Are you sure you want to STOP the auction immediately and resolve the winners based on current bids?")) {
-                // Emit the new event to the server
-                socket.emit('force_stop_auction');
-                STOP_BTN.disabled = true; // Disable while waiting for server response
-            }
-        };
-
-
-        // --- Socket.IO Event Handlers (Update existing handlers) ---
-        
-        socket.on('initial_admin_state', (state) => {
-            // ... (existing code)
-            
-            // Set initial state for the new button
-            STOP_BTN.disabled = !state.active; 
-        });
-
-        socket.on('auction_start', (data) => {
-            // ... (existing code for auction_start)
-            START_BTN.disabled = true;
-            STOP_BTN.disabled = false; // Enable stop button when auction starts
-        });
-        
-        socket.on('auction_finished', (assetResults) => {
-            // ... (existing code for auction_finished)
-            START_BTN.disabled = false; // Allow restart
-            STOP_BTN.disabled = true; // Disable stop button when finished
-            // ...
-        });
-
-        socket.on('admin_action_response', (data) => {
-             console.log(data.message);
-             // You can add a visual alert here if needed: alert(data.message);
-        });
-
-        socket.on('auction_reset', () => {
-             // ...
-             START_BTN.disabled = false; 
-             STOP_BTN.disabled = true;
-             // ...
-        });

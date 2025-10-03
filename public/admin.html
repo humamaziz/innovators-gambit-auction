@@ -7,10 +7,10 @@
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
     <style>
-        /* Add specific admin styles here, supplementing style.css */
         .controls, .monitor { margin-bottom: 30px; padding: 20px; border: 1px solid #112240; border-radius: 8px; }
         .controls button { padding: 10px 20px; margin-right: 10px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
         #start-btn { background-color: #00FF00; }
+        #stop-btn { background-color: orange; color: white; }
         #reset-btn { background-color: #FF0000; color: white; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #112240; padding: 10px; text-align: left; }
@@ -27,13 +27,12 @@
 
     <div class="controls">
         <h2>Auction Controls</h2>
-        <form method="POST" action="/admin_action">
+        <form method="POST" action="/admin_action" style="display: inline;">
             <input type="hidden" name="pass" value="admin123"> 
             <button type="submit" name="action" value="start_auction" id="start-btn">
                 START 30 MINUTE AUCTION
             </button>
-            
-            <button type="button" id="stop-btn" onclick="forceStopAuction()" style="background-color: orange; color: white;">
+            <button type="button" id="stop-btn" onclick="forceStopAuction()">
                 FORCE STOP & RESOLVE
             </button>
             <button type="submit" name="action" value="reset_auction" id="reset-btn">
@@ -76,12 +75,13 @@
     </div>
 
     <script>
-        const socket = io('/admin'); // Connect to the specific admin namespace
+        const socket = io('/admin');
         
         // --- DOM Elements ---
         const AUCTION_STATUS_EL = document.getElementById('auction-status');
         const TIMER_EL = document.getElementById('timer');
         const START_BTN = document.getElementById('start-btn');
+        const STOP_BTN = document.getElementById('stop-btn'); // NEW ELEMENT
         const ASSET_MONITOR_BODY = document.querySelector('#asset-monitor tbody');
         const TEAM_STATUS_BODY = document.querySelector('#team-status-table tbody');
         
@@ -93,25 +93,24 @@
 
         // --- Core Functions ---
 
+        function updateButtonStates(isActive) {
+            START_BTN.disabled = isActive;
+            STOP_BTN.disabled = !isActive;
+            AUCTION_STATUS_EL.textContent = isActive ? 'LIVE' : 'CLOSED';
+        }
+        
         function renderAssetMonitor() {
             ASSET_MONITOR_BODY.innerHTML = '';
             for (const id in assetCatalog) {
                 const asset = assetCatalog[id];
                 const bidCount = Object.keys(asset.current_bids).length;
                 
-                // Find highest bid for display (Admin view only)
                 const highestBid = bidCount > 0 ? 
                     Math.max(...Object.values(asset.current_bids)) : 0;
                 
-                // Winner info
-                let winnerText = asset.winner ? 
+                let winnerText = (asset.winner && AUCTION_STATUS_EL.textContent !== 'LIVE') ? 
                     `${asset.winner} (${formatVC(asset.final_price)})` : 
                     '--';
-                    
-                // If auction is LIVE, hide final price/winner
-                if (AUCTION_STATUS_EL.textContent === 'LIVE') {
-                     winnerText = asset.winner ? 'Determined at end' : '--';
-                }
 
                 const row = ASSET_MONITOR_BODY.insertRow();
                 row.id = `asset-row-${id}`;
@@ -141,17 +140,29 @@
              }
         }
 
+        // --- NEW FUNCTION TO STOP THE AUCTION ---
+        window.forceStopAuction = () => {
+            if (confirm("Are you sure you want to STOP the auction immediately and resolve the winners based on current bids?")) {
+                STOP_BTN.disabled = true; // Disable to prevent double-click
+                socket.emit('force_stop_auction');
+            }
+        };
+
         // --- Socket.IO Event Handlers ---
 
         socket.on('initial_admin_state', (state) => {
             assetCatalog = state.assets;
             teams = state.teams;
-            
-            AUCTION_STATUS_EL.textContent = state.active ? 'LIVE' : 'CLOSED';
-            START_BTN.disabled = state.active;
-            
+            updateButtonStates(state.active);
             renderAssetMonitor();
             renderTeamStatus();
+            
+            // Set initial timer value if live
+            if (state.active) {
+                 const minutes = Math.floor(state.timeLeft / 60);
+                 const seconds = state.timeLeft % 60;
+                 TIMER_EL.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
         });
 
         socket.on('timer_update', (data) => {
@@ -162,33 +173,46 @@
         });
         
         socket.on('admin_update_bids', (updates) => {
-            // Update local asset state and re-render the monitor
             for(const assetId in updates) {
                 assetCatalog[assetId].current_bids = updates[assetId].current_bids;
             }
+            // Only re-render the monitor for live updates
             renderAssetMonitor();
         });
 
-        socket.on('auction_finished', (assetResults) => {
-            AUCTION_STATUS_EL.textContent = 'RESOLVED';
-            TIMER_EL.textContent = '00:00';
-            START_BTN.disabled = true;
-            
-            assetCatalog = assetResults;
-            renderAssetMonitor(); 
+        socket.on('auction_start', (data) => {
+            updateButtonStates(true);
         });
         
+        socket.on('auction_finished', (assetResults) => {
+            TIMER_EL.textContent = '00:00';
+            updateButtonStates(false);
+            assetCatalog = assetResults;
+            renderAssetMonitor();
+            // Note: Team update (VC/Assets Won) happens via 'admin_update_teams'
+        });
+
         socket.on('admin_update_teams', (teamsData) => {
-            // This is the post-resolution update with final VC and assets won
             teams = teamsData;
             renderTeamStatus();
         });
 
         socket.on('auction_reset', () => {
-             // Reload the page to get the fresh, reset state from the server
              window.location.reload(); 
         });
 
+        socket.on('admin_action_response', (data) => {
+             if (data.success) {
+                 console.log(data.message);
+             } else {
+                 alert(data.message);
+                 // If stop failed, re-enable the button
+                 updateButtonStates(true);
+             }
+        });
+
+        // Initialization (set initial state on load)
+        updateButtonStates(false); 
     </script>
 </body>
 </html>
