@@ -15,7 +15,7 @@ const adminNsp = io.of("/admin");
 const PORT = process.env.PORT || 3000;
 
 // --- Global State ---
-const AUCTION_DURATION_SECONDS = 30 * 60; // 30 minutes
+const AUCTION_DURATION_SECONDS = 1 * 60; // 30 minutes
 let AUCTION_END_TIME = null;
 let AUCTION_ACTIVE = false;
 let AUCTION_TIMER_INTERVAL = null;
@@ -255,14 +255,31 @@ participantNsp.on('connection', (socket) => {
 
 // Admin Namespace
 adminNsp.on('connection', (socket) => {
-    console.log(`Admin connected: ${socket.id}`);
-    
-    // Send full, current state to the admin upon connection
-    socket.emit('initial_admin_state', {
-        teams: TEAMS, 
-        assets: ASSET_CATALOG, 
-        active: AUCTION_ACTIVE, 
-        timeLeft: getRemainingTime() 
+    // server.js (New code to add inside the adminNsp.on('connection', (socket) => { ... }) block)
+
+    socket.on('force_stop_auction', () => {
+        if (!AUCTION_ACTIVE) {
+            console.log("Admin attempted to stop inactive auction.");
+            socket.emit('admin_action_response', { success: false, message: 'Auction is already stopped or finished.' });
+            return;
+        }
+
+        // 1. Immediately clear the timer
+        if (AUCTION_TIMER_INTERVAL) {
+            clearInterval(AUCTION_TIMER_INTERVAL);
+            AUCTION_TIMER_INTERVAL = null;
+        }
+        
+        // 2. Set the end time to now (or just slightly in the past)
+        AUCTION_END_TIME = Date.now() - 1000; 
+        AUCTION_ACTIVE = false;
+
+        console.log("Admin forced auction stop. Resolving results now.");
+        
+        // 3. Resolve the auction and broadcast results
+        resolveAuction(); 
+
+        socket.emit('admin_action_response', { success: true, message: 'Auction forcefully stopped and results resolved.' });
     });
 });
 
@@ -273,3 +290,64 @@ server.listen(PORT, () => {
     console.log(`Admin Panel: http://localhost:${PORT}/admin_panel?pass=admin123`);
     console.log(`Team T1: http://localhost:${PORT}/?team=T1`);
 });
+
+// public/admin.html: Inside the <script> block
+
+        // --- DOM Elements (Add the new button) ---
+        const STOP_BTN = document.getElementById('stop-btn');
+        // ... (other DOM elements)
+
+        // --- Core Functions (Update renderAssetMonitor) ---
+        function renderAssetMonitor() {
+            // ... (existing code)
+            
+            // Re-check button state after rendering to account for initial load/reset
+            AUCTION_STATUS_EL.textContent === 'LIVE' ? START_BTN.disabled = true : START_BTN.disabled = false;
+            AUCTION_STATUS_EL.textContent === 'LIVE' ? STOP_BTN.disabled = false : STOP_BTN.disabled = true;
+
+            // ... (rest of the function)
+        }
+        
+        // --- NEW FUNCTION TO STOP THE AUCTION ---
+        window.forceStopAuction = () => {
+            if (confirm("Are you sure you want to STOP the auction immediately and resolve the winners based on current bids?")) {
+                // Emit the new event to the server
+                socket.emit('force_stop_auction');
+                STOP_BTN.disabled = true; // Disable while waiting for server response
+            }
+        };
+
+
+        // --- Socket.IO Event Handlers (Update existing handlers) ---
+        
+        socket.on('initial_admin_state', (state) => {
+            // ... (existing code)
+            
+            // Set initial state for the new button
+            STOP_BTN.disabled = !state.active; 
+        });
+
+        socket.on('auction_start', (data) => {
+            // ... (existing code for auction_start)
+            START_BTN.disabled = true;
+            STOP_BTN.disabled = false; // Enable stop button when auction starts
+        });
+        
+        socket.on('auction_finished', (assetResults) => {
+            // ... (existing code for auction_finished)
+            START_BTN.disabled = false; // Allow restart
+            STOP_BTN.disabled = true; // Disable stop button when finished
+            // ...
+        });
+
+        socket.on('admin_action_response', (data) => {
+             console.log(data.message);
+             // You can add a visual alert here if needed: alert(data.message);
+        });
+
+        socket.on('auction_reset', () => {
+             // ...
+             START_BTN.disabled = false; 
+             STOP_BTN.disabled = true;
+             // ...
+        });
