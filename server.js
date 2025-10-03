@@ -5,7 +5,7 @@ const socketio = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const session = require('express-session');
-const { v4: uuidv4 } = require('uuid'); // Used for generating unique IDs
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
@@ -13,7 +13,9 @@ const server = http.createServer(app);
 const DATA_FILE = path.join(__dirname, 'game_data.json'); 
 const SECRET_KEY = process.env.SESSION_SECRET || 'a_very_long_secret_key_for_gambit_auction_2025';
 
-// Configure Session Middleware
+// --- Configure Middleware (ORDER IS CRUCIAL) ---
+
+// 1. Configure Session Middleware (Must be before routes/static serving)
 app.use(session({
     secret: SECRET_KEY,
     resave: false,
@@ -21,16 +23,35 @@ app.use(session({
     cookie: { secure: process.env.NODE_ENV === 'production' }
 }));
 
+// 2. Configure JSON and URL Encoding Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// 3. Configure Static File Serving (Must be before the root route logic)
+app.use(express.static(path.join(__dirname, 'public')));
+
+
+// --- Global State & Persistence Functions ---
+let STATE = loadState(); 
+let AUCTION_TIMER_INTERVAL = null;
+
 // Use two namespaces
 const io = socketio(server);
+// Attach session middleware to socket.io for authentication within the namespaces
+io.use((socket, next) => {
+    session({
+        secret: SECRET_KEY,
+        resave: false,
+        saveUninitialized: true,
+        cookie: { secure: process.env.NODE_ENV === 'production' }
+    })(socket.request, socket.request.res || {}, next);
+});
+
 const participantNsp = io.of("/");
 const adminNsp = io.of("/admin");
 
 const PORT = process.env.PORT || 3000;
 
-// --- Global State & Persistence Functions ---
-let STATE = loadState(); 
-let AUCTION_TIMER_INTERVAL = null;
 
 function loadState() {
     try {
@@ -103,11 +124,12 @@ function resolveAuction() {
         AUCTION_TIMER_INTERVAL = null;
     }
     STATE.AUCTION_ACTIVE = false;
-    saveState();
-
+    
+    // ... (omitted resolution logic for brevity, assume it is complete and uses STATE)
+    
+    // Determine winners, process bids, and deduct VC here...
     const winningBids = {};
 
-    // Determine winners for each item
     for (const assetId in STATE.ASSET_CATALOG) {
         const asset = STATE.ASSET_CATALOG[assetId];
         let validBids = {};
@@ -137,7 +159,6 @@ function resolveAuction() {
         }
     }
 
-    // Process winning bids and deduct VC
     for (const teamId in winningBids) {
         const team = STATE.TEAMS[teamId];
         const totalCost = winningBids[teamId].reduce((sum, win) => sum + win.price, 0);
@@ -151,13 +172,13 @@ function resolveAuction() {
                 });
             }
         } else {
-            // VOID the team's wins due to budget failure
             for (const win of winningBids[teamId]) {
                 STATE.ASSET_CATALOG[win.assetId].winner = "VOID (Budget Fail)";
                 STATE.ASSET_CATALOG[win.assetId].final_price = 0;
             }
         }
     }
+    // End resolution logic.
     
     saveState();
     participantNsp.emit('auction_finished', STATE.ASSET_CATALOG);
@@ -166,7 +187,6 @@ function resolveAuction() {
 }
 
 function resetLiveGameState() {
-    // Clear timer
     if (AUCTION_TIMER_INTERVAL) {
         clearInterval(AUCTION_TIMER_INTERVAL);
         AUCTION_TIMER_INTERVAL = null;
@@ -174,14 +194,12 @@ function resetLiveGameState() {
     STATE.AUCTION_ACTIVE = false;
     STATE.AUCTION_END_TIME = null;
     
-    // Reset ASSET BIDS and WINNERS (but keep the catalog intact)
     for (const id in STATE.ASSET_CATALOG) {
         STATE.ASSET_CATALOG[id].current_bids = {};
         STATE.ASSET_CATALOG[id].winner = null;
         STATE.ASSET_CATALOG[id].final_price = 0;
     }
     
-    // Reset Team VC and Assets Won (but keep credentials/names)
     for (const id in STATE.TEAMS) {
         STATE.TEAMS[id].vc = 500000;
         STATE.TEAMS[id].assets_won = [];
@@ -193,33 +211,23 @@ function resetLiveGameState() {
 }
 
 
-// server.js (Around line 160)
+// --- Express Routing (Auth and API) ---
 
-// --- Express Routing (Auth, Static Files, Admin Actions) ---
-
-// Serve static files from the 'public' directory
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// --- Participant & Admin Login/Root Route ---
-
+// Root Route: Handles authentication and redirection
 app.get('/', (req, res) => {
-    // 1. Check if the user is authenticated as an Admin
+    // 1. Admin authenticated
     if (req.session.isAdmin) {
         return res.redirect('/admin_panel');
     }
-
-    // 2. Check if the user is authenticated as a Team
-    if (req.session.teamId) {
-        // If authenticated, serve the bidding page (index.html)
+    // 2. Team authenticated
+    if (req.session.teamId && STATE.TEAMS[req.session.teamId]) {
         return res.sendFile(path.join(__dirname, 'public', 'index.html'));
     }
-
-    // 3. If NOT authenticated as either, serve the login page
+    // 3. Not authenticated
     return res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
+// Login POST Handler
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
@@ -263,8 +271,7 @@ app.post('/admin_action', (req, res) => {
     } else if (action === 'start_auction' && !STATE.AUCTION_ACTIVE) {
         startTimer();
     } else if (action === 'reset_all') {
-        // 1. Save current game to history
-        if (Object.keys(STATE.ASSET_CATALOG).length > 0) {
+        if (Object.keys(STATE.ASSET_CATALOG).length > 0 && STATE.TEAMS) {
             STATE.GAME_HISTORY.push({
                 gameId: STATE.LIVE_GAME_ID,
                 date: new Date().toISOString(),
@@ -274,7 +281,6 @@ app.post('/admin_action', (req, res) => {
             });
             STATE.LIVE_GAME_ID++;
         }
-        // 2. Reset live game state, keeping credentials
         resetLiveGameState();
     }
     
@@ -285,7 +291,6 @@ app.post('/admin_action', (req, res) => {
 
 app.get('/api/admin/state', (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
-    // Send all state data
     res.json({
         assets: STATE.ASSET_CATALOG,
         teams: STATE.TEAMS,
@@ -300,9 +305,10 @@ app.post('/api/admin/asset', (req, res) => {
     const { id, name, category, min_bid, action } = req.body;
     const bid = parseInt(min_bid);
     
-    if (action === 'add' && !STATE.ASSET_CATALOG[id]) {
-        STATE.ASSET_CATALOG[uuidv4()] = { 
-            id: uuidv4(), name, category, min_bid: bid, current_bids: {}, winner: null, final_price: 0 
+    if (action === 'add') {
+        const newId = uuidv4();
+        STATE.ASSET_CATALOG[newId] = { 
+            id: newId, name, category, min_bid: bid, current_bids: {}, winner: null, final_price: 0 
         };
     } else if (action === 'update' && STATE.ASSET_CATALOG[id]) {
         STATE.ASSET_CATALOG[id].name = name;
@@ -322,13 +328,13 @@ app.post('/api/admin/team', (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
     const { id, name, username, password, action } = req.body;
     
-    if (action === 'add' && !STATE.TEAMS[id]) {
+    if (action === 'add') {
         const newId = uuidv4();
         STATE.TEAMS[newId] = { id: newId, name, username, password, vc: 500000, assets_won: [] };
     } else if (action === 'update' && STATE.TEAMS[id]) {
         STATE.TEAMS[id].name = name;
         STATE.TEAMS[id].username = username;
-        STATE.TEAMS[id].password = password; // Warning: Passwords should be hashed in production
+        STATE.TEAMS[id].password = password;
     } else if (action === 'delete' && STATE.TEAMS[id]) {
         delete STATE.TEAMS[id];
     } else {
@@ -340,18 +346,16 @@ app.post('/api/admin/team', (req, res) => {
 });
 
 
-// --- Socket.IO Handlers ---
+// --- Socket.IO Handlers (Real-time) ---
 
 // Participant Namespace
 participantNsp.on('connection', (socket) => {
-    // Retrieve team ID from session if authenticated
     const teamId = socket.request.session.teamId;
-    if (!teamId) {
-        socket.disconnect(true); // Disconnect unauthenticated user
+    if (!teamId || !STATE.TEAMS[teamId]) {
+        socket.disconnect(true);
         return;
     }
 
-    // Send initial state
     socket.emit('initial_state', {
         teamId: teamId,
         teamData: STATE.TEAMS[teamId],
@@ -383,7 +387,6 @@ participantNsp.on('connection', (socket) => {
              return;
         }
 
-        // Store the sealed bid
         asset.current_bids[teamId] = bid;
         saveState();
 
@@ -400,7 +403,6 @@ participantNsp.on('connection', (socket) => {
 
 // Admin Namespace
 adminNsp.on('connection', (socket) => {
-    // Admin namespace assumes admin has already passed the Express middleware check
     
     socket.on('force_stop_auction', () => {
         if (!STATE.AUCTION_ACTIVE) {
