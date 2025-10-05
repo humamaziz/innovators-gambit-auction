@@ -13,16 +13,20 @@ const server = http.createServer(app);
 const DATA_FILE = path.join(__dirname, 'game_data.json'); 
 const SECRET_KEY = process.env.SESSION_SECRET || 'a_very_long_secret_key_for_gambit_auction_2025';
 
+// --- CRITICAL PROXY & TRUST SETTING ---
+// This tells Express to trust the proxy (Render) and allows secure cookies to work.
+app.set('trust proxy', 1); 
+
 // --- Configure Middleware (ORDER IS CRUCIAL) ---
 
-// 1. Configure Session Middleware (CRITICAL FIX: Added cookie path)
+// 1. Configure Session Middleware (with final stable config)
 app.use(session({
     secret: SECRET_KEY,
     resave: false,
-    saveUninitialized: false,
+    saveUninitialized: false, 
     cookie: { 
         secure: true,       // Must be true for HTTPS (Render)
-        sameSite: 'none',   // Must be 'none' for cross-domain/proxy
+        sameSite: 'none',   // Must be 'none' for proxy environments
         path: '/'           // Ensures cookie is valid across all routes
     }
 }));
@@ -72,8 +76,7 @@ function loadState() {
         AUCTION_DURATION_SECONDS: 30 * 60,
         LIVE_GAME_ID: 1,
         GAME_HISTORY: [], 
-        // Updated Admin Credentials
-        ADMIN_USERNAME: 'mohdhumama5@gmail.com',
+        ADMIN_USERNAME: 'mohdhumama@gmail.com',
         ADMIN_PASSWORD: 'Humam@2004' 
     };
 }
@@ -127,8 +130,56 @@ function resolveAuction() {
     }
     STATE.AUCTION_ACTIVE = false;
     
-    // NOTE: Full resolution logic is omitted here for brevity, but remains in the actual file.
-    // It determines winners, deducts VC, and updates STATE.ASSET_CATALOG and STATE.TEAMS.
+    const winningBids = {};
+
+    for (const assetId in STATE.ASSET_CATALOG) {
+        const asset = STATE.ASSET_CATALOG[assetId];
+        let validBids = {};
+        
+        for (const teamId in asset.current_bids) {
+            const bid = asset.current_bids[teamId];
+            const team = STATE.TEAMS[teamId];
+            if (bid >= asset.min_bid && team && bid <= team.vc) {
+                validBids[teamId] = bid;
+            }
+        }
+        
+        if (Object.keys(validBids).length > 0) {
+            const winnerId = Object.keys(validBids).reduce((a, b) => validBids[a] > validBids[b] ? a : b);
+            const finalPrice = validBids[winnerId];
+
+            asset.winner = winnerId;
+            asset.final_price = finalPrice;
+
+            if (!winningBids[winnerId]) {
+                winningBids[winnerId] = [];
+            }
+            winningBids[winnerId].push({ assetId: assetId, price: finalPrice });
+        } else {
+            asset.winner = "NO_WINNER";
+            asset.final_price = 0;
+        }
+    }
+
+    for (const teamId in winningBids) {
+        const team = STATE.TEAMS[teamId];
+        const totalCost = winningBids[teamId].reduce((sum, win) => sum + win.price, 0);
+
+        if (totalCost <= team.vc) {
+            team.vc -= totalCost;
+            for (const win of winningBids[teamId]) {
+                team.assets_won.push({
+                    name: STATE.ASSET_CATALOG[win.assetId].name,
+                    cost: win.price
+                });
+            }
+        } else {
+            for (const win of winningBids[teamId]) {
+                STATE.ASSET_CATALOG[win.assetId].winner = "VOID (Budget Fail)";
+                STATE.ASSET_CATALOG[win.assetId].final_price = 0;
+            }
+        }
+    }
     
     saveState();
     participantNsp.emit('auction_finished', STATE.ASSET_CATALOG);
@@ -170,16 +221,13 @@ app.get('/', (req, res) => {
     if (req.session.teamId && STATE.TEAMS[req.session.teamId]) {
         return res.sendFile(path.join(__dirname, 'public', 'bidding.html'));
     }
-    // Final routing fix ensures non-authenticated users land on login page
     return res.redirect('/login_page');
 });
 
-// NEW: Dedicated Login Page Route
 app.get('/login_page', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// Logout Route
 app.get('/logout', (req, res) => {
     req.session.destroy(err => {
         if (err) {
@@ -187,18 +235,18 @@ app.get('/logout', (req, res) => {
             return res.redirect('/');
         }
         res.clearCookie('connect.sid'); 
-        res.redirect('/login_page'); // Redirect to login page after logout
+        res.redirect('/login_page');
     });
 });
 
-// Login POST Handler (Async save is critical for Render)
+// Login POST Handler (CRITICAL ASYNC SAVE)
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
     // 1. Check Admin login
     if (username === STATE.ADMIN_USERNAME && password === STATE.ADMIN_PASSWORD) {
         req.session.isAdmin = true;
-        return req.session.save(err => {
+        return req.session.save(err => { // Wait for session save
             if (err) {
                 console.error("Session save error (Admin):", err);
                 return res.send('Login Error. Please try clearing browser cache.');
@@ -213,7 +261,7 @@ app.post('/login', (req, res) => {
         if (team.username === username && team.password === password) {
             req.session.teamId = team.id;
             
-            return req.session.save(err => {
+            return req.session.save(err => { // Wait for session save
                 if (err) {
                     console.error("Session save error (Team):", err);
                     return res.send('Login Error. Please try clearing browser cache.');
@@ -224,12 +272,20 @@ app.post('/login', (req, res) => {
     }
 
     // 3. Invalid credentials
-    // The previous failed login error text will be removed by the redirect to /login_page
     return res.send('Invalid credentials. <a href="/login_page">Try again</a>.');
 });
 
-// Admin Panel Routes (Protected) and CRUD APIs...
-// (These routes remain the same as the final versions)
+// Admin Panel Routes (Protected)
+app.get('/admin_panel', (req, res) => {
+    if (!req.session.isAdmin) {
+        return res.redirect('/');
+    }
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// ... (Rest of Admin CRUD and Socket.IO handlers omitted for brevity, but they are included in your full file)
+// Note: Ensure the remaining portion of your server.js is intact from the previous step.
+
 
 // --- Start Server ---
 server.listen(PORT, () => {
