@@ -205,10 +205,6 @@ function resetLiveGameState() {
     adminNsp.emit('auction_reset');
 }
 
-
-// --- Express Routing (Auth and API) ---
-
-// Root Route: Handles authentication and redirection
 app.get('/', (req, res) => {
     if (req.session.isAdmin) {
         return res.redirect('/admin_panel');
@@ -216,8 +212,7 @@ app.get('/', (req, res) => {
     if (req.session.teamId && STATE.TEAMS[req.session.teamId]) {
         return res.sendFile(path.join(__dirname, 'public', 'index.html'));
     }
-    // Redirect unauthenticated users to the specific login route
-    return res.redirect('/login_page');
+    res.redirect('/login_page');
 });
 
 // NEW: Dedicated Login Page Route

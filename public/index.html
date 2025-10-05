@@ -185,15 +185,27 @@
         
         // --- Socket.IO Event Handlers ---
         
-        socket.on('initial_state', (state) => {
-            TEAM_ID = state.teamId;
-            updateTeamDisplay(state.teamData);
-            assetCatalog = state.assets;
-            auctionActive = state.active;
-            
-            renderAssetCards();
-            STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Review results and assets.';
-        });
+        // public/index.html (Inside the <script> block)
+
+// --- Socket.IO Event Handlers ---
+        
+socket.on('initial_state', (state) => {
+    // === AUTHENTICATION CHECK FIX ===
+    if (!state.teamId || !state.teamData) {
+        // If the server sends no ID or team data, force client-side logout/redirect
+        window.location.href = '/logout'; 
+        return;
+    }
+    // === END AUTH CHECK FIX ===
+
+    TEAM_ID = state.teamId;
+    updateTeamDisplay(state.teamData);
+    assetCatalog = state.assets;
+    auctionActive = state.active;
+    
+    renderAssetCards();
+    STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Review results and assets.';
+});
 
         socket.on('timer_update', (data) => {
             const time_left = data.timeLeft;
