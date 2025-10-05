@@ -14,13 +14,15 @@ const DATA_FILE = path.join(__dirname, 'game_data.json');
 const SECRET_KEY = process.env.SESSION_SECRET || 'a_very_long_secret_key_for_gambit_auction_2025';
 
 // --- Configure Middleware (ORDER IS CRUCIAL) ---
-
-// 1. Configure Session Middleware
+// Configure Session Middleware
 app.use(session({
     secret: SECRET_KEY,
     resave: false,
-    saveUninitialized: true,
-    cookie: { secure: process.env.NODE_ENV === 'production' }
+    saveUninitialized: false, // Changed to false to minimize session creation
+    cookie: { 
+        secure: true, // IMPORTANT: Render forces HTTPS, so this must be true
+        sameSite: 'none' // IMPORTANT: Necessary for cross-site cookie settings on HTTPS
+    }
 }));
 
 // 2. Configure JSON and URL Encoding Middleware
@@ -62,17 +64,21 @@ function loadState() {
     } catch (e) {
         console.error("Error loading state:", e);
     }
-    return {
-        ASSET_CATALOG: {}, 
-        TEAMS: {}, 
-        AUCTION_ACTIVE: false,
-        AUCTION_END_TIME: null,
-        AUCTION_DURATION_SECONDS: 30 * 60,
-        LIVE_GAME_ID: 1,
-        GAME_HISTORY: [], 
-        ADMIN_USERNAME: 'admin',
-        ADMIN_PASSWORD: 'admin123' 
-    };
+
+// Default initial state
+return {
+    ASSET_CATALOG: {}, 
+    TEAMS: {}, 
+    AUCTION_ACTIVE: false,
+    AUCTION_END_TIME: null,
+    AUCTION_DURATION_SECONDS: 30 * 60, 
+    LIVE_GAME_ID: 1,
+    GAME_HISTORY: [], 
+    
+    // --- UPDATED ADMIN CREDENTIALS ---
+    ADMIN_USERNAME: 'mohdhumama@gmail.com', // NEW USERNAME
+    ADMIN_PASSWORD: 'Humam@2004'          // NEW PASSWORD
+};
 }
 
 function saveState() {
