@@ -208,32 +208,19 @@ function resetLiveGameState() {
 // server.js (Around line 200)
 
 // Root Route: Handles authentication and redirection
+// server.js (Around line 200, only showing the relevant change)
+
 app.get('/', (req, res) => {
-    // 1. Check if the user is authenticated as Admin
+    // 1. Admin authenticated
     if (req.session.isAdmin) {
         return res.redirect('/admin_panel');
     }
-    
-    // 2. Check if the user is authenticated as a Team
+    // 2. Team authenticated
     if (req.session.teamId && STATE.TEAMS[req.session.teamId]) {
-        // If authenticated, serve the bidding page (index.html)
-        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+        // *** UPDATED FILENAME HERE ***
+        return res.sendFile(path.join(__dirname, 'public', 'bidding.html'));
     }
-    
-    // 3. UNATHENTICATED PATH: AGGRESSIVE REDIRECT
-    
-    // If a session ID exists but auth failed (stale cookie issue), destroy it and redirect.
-    if (req.session.id) {
-        req.session.destroy(err => {
-            // Clear the session cookie from the client's browser
-            res.clearCookie('connect.sid'); 
-            // Force redirect to the controlled login route
-            return res.redirect('/login_page');
-        });
-        return; // Important: exit the function
-    }
-
-    // If no session exists, simply redirect to the login page
+    // 3. Not authenticated -> Redirect to the specific login route
     return res.redirect('/login_page');
 });
 
