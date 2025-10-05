@@ -15,7 +15,7 @@ const SECRET_KEY = process.env.SESSION_SECRET || 'a_very_long_secret_key_for_gam
 
 // --- Configure Middleware (ORDER IS CRUCIAL) ---
 
-// 1. Configure Session Middleware (Must be before routes/static serving)
+// 1. Configure Session Middleware
 app.use(session({
     secret: SECRET_KEY,
     resave: false,
@@ -27,7 +27,7 @@ app.use(session({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 3. Configure Static File Serving (Must be before the root route logic)
+// 3. Configure Static File Serving
 app.use(express.static(path.join(__dirname, 'public')));
 
 
@@ -62,13 +62,12 @@ function loadState() {
     } catch (e) {
         console.error("Error loading state:", e);
     }
-    // Default initial state
     return {
         ASSET_CATALOG: {}, 
         TEAMS: {}, 
         AUCTION_ACTIVE: false,
         AUCTION_END_TIME: null,
-        AUCTION_DURATION_SECONDS: 30 * 60, // Default duration
+        AUCTION_DURATION_SECONDS: 30 * 60,
         LIVE_GAME_ID: 1,
         GAME_HISTORY: [], 
         ADMIN_USERNAME: 'admin',
@@ -125,9 +124,6 @@ function resolveAuction() {
     }
     STATE.AUCTION_ACTIVE = false;
     
-    // ... (omitted resolution logic for brevity, assume it is complete and uses STATE)
-    
-    // Determine winners, process bids, and deduct VC here...
     const winningBids = {};
 
     for (const assetId in STATE.ASSET_CATALOG) {
@@ -178,7 +174,6 @@ function resolveAuction() {
             }
         }
     }
-    // End resolution logic.
     
     saveState();
     participantNsp.emit('auction_finished', STATE.ASSET_CATALOG);
@@ -215,29 +210,42 @@ function resetLiveGameState() {
 
 // Root Route: Handles authentication and redirection
 app.get('/', (req, res) => {
-    // 1. Admin authenticated
     if (req.session.isAdmin) {
         return res.redirect('/admin_panel');
     }
-    // 2. Team authenticated
     if (req.session.teamId && STATE.TEAMS[req.session.teamId]) {
         return res.sendFile(path.join(__dirname, 'public', 'index.html'));
     }
-    // 3. Not authenticated
-    return res.sendFile(path.join(__dirname, 'public', 'login.html'));
+    // Redirect unauthenticated users to the specific login route
+    return res.redirect('/login_page');
+});
+
+// NEW: Dedicated Login Page Route
+app.get('/login_page', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// Logout Route
+app.get('/logout', (req, res) => {
+    req.session.destroy(err => {
+        if (err) {
+            console.error('Error destroying session:', err);
+            return res.redirect('/');
+        }
+        res.clearCookie('connect.sid'); 
+        res.redirect('/');
+    });
 });
 
 // Login POST Handler
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
-    // Admin login
     if (username === STATE.ADMIN_USERNAME && password === STATE.ADMIN_PASSWORD) {
         req.session.isAdmin = true;
         return res.redirect('/admin_panel');
     }
 
-    // Team login
     for (const teamId in STATE.TEAMS) {
         const team = STATE.TEAMS[teamId];
         if (team.username === username && team.password === password) {
@@ -288,7 +296,6 @@ app.post('/admin_action', (req, res) => {
 });
 
 // --- REST API for Admin CRUD ---
-
 app.get('/api/admin/state', (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
     res.json({
@@ -307,9 +314,7 @@ app.post('/api/admin/asset', (req, res) => {
     
     if (action === 'add') {
         const newId = uuidv4();
-        STATE.ASSET_CATALOG[newId] = { 
-            id: newId, name, category, min_bid: bid, current_bids: {}, winner: null, final_price: 0 
-        };
+        STATE.ASSET_CATALOG[newId] = { id: newId, name, category, min_bid: bid, current_bids: {}, winner: null, final_price: 0 };
     } else if (action === 'update' && STATE.ASSET_CATALOG[id]) {
         STATE.ASSET_CATALOG[id].name = name;
         STATE.ASSET_CATALOG[id].category = category;

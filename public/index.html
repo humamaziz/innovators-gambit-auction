@@ -22,6 +22,12 @@
             background-color: #FFC72C;
             color: #0A192F;
         }
+        .item-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 30px;
+        }
         #assets-section ul {
             list-style: none;
             padding: 0;
@@ -66,24 +72,20 @@
     </section>
 
     <script>
-        // Global variables updated by the server
         let TEAM_ID = null;
         let teamData = {};
         let assetCatalog = {};
         let auctionActive = false;
         
-        // --- DOM Elements ---
         const VC_BALANCE_EL = document.getElementById('vc-balance');
         const TEAM_NAME_EL = document.getElementById('team-name');
         const TIMER_EL = document.getElementById('timer');
         const STATUS_MSG_EL = document.getElementById('status-message');
-        const ASSETS_DISPLAY_EL = document.getElementById('bidding-section'); // Updated ID
+        const ASSETS_DISPLAY_EL = document.getElementById('bidding-section');
         const MY_ASSETS_LIST_EL = document.getElementById('my-assets-list');
         const MY_ASSETS_TOTAL_EL = document.getElementById('my-assets-total');
         
         const socket = io();
-
-        // --- Core Functions ---
 
         const formatVC = (amount) => `$VC ${amount.toLocaleString()}`;
         
@@ -102,8 +104,6 @@
             teamData = team;
             TEAM_NAME_EL.textContent = `Team: ${team.name}`;
             VC_BALANCE_EL.textContent = formatVC(team.vc);
-            
-            // Re-render my assets list
             renderMyAssets();
         }
         
@@ -187,13 +187,11 @@
         
         socket.on('initial_state', (state) => {
             TEAM_ID = state.teamId;
-            teamData = state.teamData || {}; // Set team data on load
+            updateTeamDisplay(state.teamData);
             assetCatalog = state.assets;
             auctionActive = state.active;
             
-            updateTeamDisplay(teamData);
             renderAssetCards();
-            
             STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Review results and assets.';
         });
 
@@ -220,19 +218,19 @@
             STATUS_MSG_EL.textContent = 'AUCTION ENDED! Review your asset portfolio for Day 2.';
             assetCatalog = assetResults;
             renderAssetCards(); 
-            // The server will send a subsequent 'team_update' to refresh VC/Assets Won
         });
 
-        socket.on('team_update', (updatedTeamData) => {
-             // This is used to update the VC and Assets Won immediately after resolution
-             updateTeamDisplay(updatedTeamData);
+        socket.on('admin_update_teams', (teamsData) => {
+             // Find and update the current team's data
+             if (teamsData[TEAM_ID]) {
+                updateTeamDisplay(teamsData[TEAM_ID]);
+             }
         });
 
         socket.on('auction_reset', () => {
              window.location.reload(); 
         });
         
-        // Initial setup to display bidding floor
         document.addEventListener('DOMContentLoaded', () => {
             showSection('bidding');
         });

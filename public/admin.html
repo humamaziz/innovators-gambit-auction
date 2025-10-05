@@ -7,7 +7,6 @@
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
     <style>
-        /* Specific Admin Styles */
         .controls { margin-bottom: 30px; padding: 20px; border-radius: 8px; background-color: #112240; }
         .controls button { padding: 10px 15px; margin-right: 10px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
         #start-btn { background-color: #00FF00; }
@@ -17,7 +16,7 @@
         th, td { border: 1px solid #0A192F; padding: 10px; text-align: left; background-color: #112240; }
         th { background-color: #FFC72C; color: #0A192F; }
         .tab-content { border: 1px solid #112240; padding: 20px; margin-top: 10px; background-color: #112240; border-radius: 8px; }
-        .crud-form input { margin-right: 10px; padding: 8px; border: 1px solid #CCD6F6; background-color: #0A192F; color: #CCD6F6; border-radius: 4px; }
+        .crud-form input, .crud-form select { margin-right: 10px; padding: 8px; border: 1px solid #CCD6F6; background-color: #0A192F; color: #CCD6F6; border-radius: 4px; }
         .crud-form button { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; }
     </style>
 </head>
@@ -74,7 +73,13 @@
         <h2>Add New Asset</h2>
         <form id="add-asset-form" class="crud-form" onsubmit="handleAssetSubmit(event, 'add')">
             <input type="text" name="name" placeholder="Name" required>
-            <input type="text" name="category" placeholder="Category" required style="width: 100px;">
+            <select name="category" required>
+                <option value="" disabled selected>Select Category</option>
+                <option value="Tech">Tech</option>
+                <option value="Marketing">Marketing</option>
+                <option value="Operations">Operations</option>
+                <option value="Legal">Legal/Mentorship</option>
+            </select>
             <input type="number" name="min_bid" placeholder="Min Bid (VC)" required style="width: 120px;">
             <button type="submit" style="background-color: #00FF00;">Add Asset</button>
         </form>
@@ -111,7 +116,6 @@
     <script>
         const socket = io('/admin');
         
-        // --- DOM Elements ---
         const AUCTION_STATUS_EL = document.getElementById('auction-status');
         const TIMER_EL = document.getElementById('timer');
         const START_BTN = document.getElementById('start-btn');
@@ -123,13 +127,10 @@
         const TEAM_CRUD_BODY = document.querySelector('#current-teams-table tbody');
         const HISTORY_LIST = document.getElementById('history-list');
 
-        // --- Global State ---
         let assetCatalog = {};
         let teams = {};
         
         const formatVC = (amount) => `$${amount.toLocaleString()}`;
-
-        // --- UI Control Functions ---
 
         function showAdminTab(id, button) {
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
@@ -145,8 +146,6 @@
             AUCTION_STATUS_EL.textContent = isActive ? 'LIVE' : 'CLOSED';
         }
 
-        // --- Data Rendering Functions ---
-        
         function renderHistory(history) {
              HISTORY_LIST.innerHTML = '';
              if (history.length === 0) {
@@ -175,7 +174,7 @@
                 const highestBid = bidCount > 0 ? Math.max(...Object.values(asset.current_bids)) : 0;
                 
                 let winnerText = (asset.winner && AUCTION_STATUS_EL.textContent !== 'LIVE') ? 
-                    `${asset.winner} (${formatVC(asset.final_price)})` : 
+                    `${teams[asset.winner] ? teams[asset.winner].name : asset.winner} (${formatVC(asset.final_price)})` : 
                     '--';
 
                 const row = ASSET_MONITOR_BODY.insertRow();
@@ -242,9 +241,6 @@
             }
         }
 
-
-        // --- CRUD Handlers ---
-
         async function fetchAdminState() {
             const response = await fetch('/api/admin/state');
             const state = await response.json();
@@ -269,7 +265,7 @@
             
             if (action === 'add') {
                  data.name = document.querySelector('#add-asset-form input[name="name"]').value;
-                 data.category = document.querySelector('#add-asset-form input[name="category"]').value;
+                 data.category = document.querySelector('#add-asset-form select[name="category"]').value;
                  data.min_bid = document.querySelector('#add-asset-form input[name="min_bid"]').value;
             } else if (action === 'update') {
                  data.name = document.getElementById(`asset-name-${id}`).value;
@@ -292,7 +288,7 @@
                 alert('Error processing asset request: ' + result.error);
             }
         }
-        window.handleAssetSubmit = handleAssetSubmit; // Make globally accessible
+        window.handleAssetSubmit = handleAssetSubmit;
 
         async function handleTeamSubmit(event, action, id = null) {
             event.preventDefault();
@@ -324,9 +320,7 @@
                 alert('Error processing team request: ' + result.error);
             }
         }
-        window.handleTeamSubmit = handleTeamSubmit; // Make globally accessible
-
-        // --- Auction Control Handlers ---
+        window.handleTeamSubmit = handleTeamSubmit;
 
         window.updateDuration = async () => {
             const durationMinutes = DURATION_INPUT.value;
@@ -338,7 +332,6 @@
                 method: 'POST',
                 body: form
             });
-            // State will be updated on the next socket update or page load
         };
         
         window.forceStopAuction = () => {
@@ -347,12 +340,6 @@
                 socket.emit('force_stop_auction');
             }
         };
-
-        // --- Socket.IO Event Handlers ---
-
-        socket.on('initial_admin_state', (state) => {
-            // Note: Initial state is handled by the fetchAdminState() for complexity
-        });
 
         socket.on('timer_update', (data) => {
             const time_left = data.timeLeft;
@@ -385,18 +372,16 @@
         });
 
         socket.on('auction_reset', () => {
-             fetchAdminState(); // Refresh all CRUD lists and history
+             fetchAdminState();
         });
 
         socket.on('admin_action_response', (data) => {
              if (!data.success) {
                  alert(data.message);
-                 // If stop failed, re-enable the button
                  updateButtonStates(true);
              }
         });
 
-        // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
             showAdminTab('monitor-tab', document.querySelector('.tabs button'));
             fetchAdminState();
