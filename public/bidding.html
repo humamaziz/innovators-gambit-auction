@@ -210,21 +210,27 @@
         const PROJECTED_COST_EL = document.getElementById('projected-cost');
         
         // FIX: The socket connection should be clean now
-        const socket = io();
-        document.addEventListener('DOMContentLoaded', () => {
-    // Force a small delay to ensure the server's session middleware runs first
-    setTimeout(() => {
-        // If the socket isn't connected yet, explicitly call for the initial data.
-        if (socket.connected) {
-             console.log("Socket connected, waiting for initial_state...");
-        } else {
-             // Attempt to connect/reconnect and ask for state
-             socket.connect(); 
-        }
-    }, 500); // 500ms delay
+       // public/bidding.html (Inside the <script> block)
 
-    showSection('bidding');
+// --- CRITICAL FIX: Explicit Socket.IO Configuration ---
+
+// Get the current hostname from the browser's window object
+const RENDER_HOST = window.location.host; 
+const socket = io({
+    // Use the current hostname/domain for the connection
+    path: '/socket.io',
+    transports: ['websocket'], // Force WebSocket transport protocol
+    upgrade: false,             // Prevent unnecessary upgrades
+    // Force the client to recognize the production environment
+    secure: true, 
+    withCredentials: true,
+    host: RENDER_HOST
 });
+
+// Remove the old setTimeout logic as we want the connection attempt to be immediate
+
+// --- Socket.IO Event Handlers ---
+// ... (The rest of the code remains the same, but the connection is now configured)
 
         const formatVC = (amount) => `$${amount.toLocaleString()}`;
         
