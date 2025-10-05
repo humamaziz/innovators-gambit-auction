@@ -14,19 +14,18 @@ const DATA_FILE = path.join(__dirname, 'game_data.json');
 const SECRET_KEY = process.env.SESSION_SECRET || 'a_very_long_secret_key_for_gambit_auction_2025';
 
 // --- CRITICAL PROXY & TRUST SETTING ---
-// This tells Express to trust the proxy (Render) and allows secure cookies to work.
 app.set('trust proxy', 1); 
 
 // --- Configure Middleware (ORDER IS CRUCIAL) ---
 
-// 1. Configure Session Middleware (with final stable config)
+// 1. Configure Session Middleware (with final stable cookie config)
 app.use(session({
     secret: SECRET_KEY,
     resave: false,
     saveUninitialized: false, 
     cookie: { 
-        secure: true,       // Must be true for HTTPS (Render)
-        sameSite: 'none',   // Must be 'none' for proxy environments
+        secure: true,       // MUST be true for HTTPS (Render)
+        sameSite: 'none',   // MUST be 'none' for proxy environments
         path: '/'           // Ensures cookie is valid across all routes
     }
 }));
@@ -89,7 +88,7 @@ function saveState() {
     }
 }
 
-// --- Game Logic (Only showing core functions) ---
+// --- Game Logic ---
 
 function getRemainingTime() {
     if (!STATE.AUCTION_ACTIVE || !STATE.AUCTION_END_TIME) return STATE.AUCTION_DURATION_SECONDS;
@@ -130,53 +129,81 @@ function resolveAuction() {
     }
     STATE.AUCTION_ACTIVE = false;
     
-    const winningBids = {};
+    const winningBids = {}; // { teamId: [{ assetId, price, quantity_won }] }
 
+    // 2. Determine winners for each item (Multi-Unit Logic)
     for (const assetId in STATE.ASSET_CATALOG) {
         const asset = STATE.ASSET_CATALOG[assetId];
-        let validBids = {};
         
+        // Collect all valid bids (filter by min_bid and team VC)
+        let validBids = [];
         for (const teamId in asset.current_bids) {
             const bid = asset.current_bids[teamId];
             const team = STATE.TEAMS[teamId];
+            
+            // NOTE: Bid is always for ONE unit (as per feature request)
             if (bid >= asset.min_bid && team && bid <= team.vc) {
-                validBids[teamId] = bid;
+                validBids.push({ teamId, bid, name: team.name });
             }
         }
+
+        const availableQuantity = asset.quantity;
         
-        if (Object.keys(validBids).length > 0) {
-            const winnerId = Object.keys(validBids).reduce((a, b) => validBids[a] > validBids[b] ? a : b);
-            const finalPrice = validBids[winnerId];
+        // Sort bids from highest to lowest
+        validBids.sort((a, b) => b.bid - a.bid);
+        
+        // Determine the winning pool (Top N bidders, limited by availableQuantity)
+        const winningBidders = validBids.slice(0, availableQuantity);
 
-            asset.winner = winnerId;
-            asset.final_price = finalPrice;
-
-            if (!winningBids[winnerId]) {
-                winningBids[winnerId] = [];
-            }
-            winningBids[winnerId].push({ assetId: assetId, price: finalPrice });
+        if (winningBidders.length > 0) {
+            // The winning price is the lowest bid among the winners (Uniform Price)
+            const winningPricePerUnit = winningBidders[winningBidders.length - 1].bid; 
+            
+            asset.winner = "MULTIPLE"; 
+            asset.final_price = winningPricePerUnit;
+            asset.winning_pool = winningBidders.map(w => w.teamId); 
+            
+            // Group winning bids by team for deduction later
+            winningBidders.forEach(winner => {
+                if (!winningBids[winner.teamId]) {
+                    winningBids[winner.teamId] = [];
+                }
+                // Each winner receives 1 unit at the uniform price
+                winningBids[winner.teamId].push({ 
+                    assetId: assetId, 
+                    price: winningPricePerUnit,
+                    quantity_won: 1 
+                });
+            });
         } else {
             asset.winner = "NO_WINNER";
             asset.final_price = 0;
+            asset.winning_pool = [];
         }
     }
 
+    // 3. Process winning bids and deduct VC
     for (const teamId in winningBids) {
         const team = STATE.TEAMS[teamId];
-        const totalCost = winningBids[teamId].reduce((sum, win) => sum + win.price, 0);
-
+        // Calculate cost based on price * quantity_won
+        const totalCost = winningBids[teamId].reduce((sum, win) => sum + (win.price * win.quantity_won), 0);
+        
         if (totalCost <= team.vc) {
             team.vc -= totalCost;
-            for (const win of winningBids[teamId]) {
+            // Award assets with final cost
+            winningBids[teamId].forEach(win => {
                 team.assets_won.push({
                     name: STATE.ASSET_CATALOG[win.assetId].name,
-                    cost: win.price
+                    cost: win.price, // Store price per unit
+                    quantity: win.quantity_won
                 });
-            }
+            });
         } else {
+            // VOID Logic: Team loses all wins if total cost exceeds budget
             for (const win of winningBids[teamId]) {
                 STATE.ASSET_CATALOG[win.assetId].winner = "VOID (Budget Fail)";
                 STATE.ASSET_CATALOG[win.assetId].final_price = 0;
+                STATE.ASSET_CATALOG[win.assetId].winning_pool = []; // Clear pool on void
             }
         }
     }
@@ -199,6 +226,7 @@ function resetLiveGameState() {
         STATE.ASSET_CATALOG[id].current_bids = {};
         STATE.ASSET_CATALOG[id].winner = null;
         STATE.ASSET_CATALOG[id].final_price = 0;
+        STATE.ASSET_CATALOG[id].winning_pool = []; // Reset pool
     }
     
     for (const id in STATE.TEAMS) {
@@ -243,10 +271,9 @@ app.get('/logout', (req, res) => {
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
-    // 1. Check Admin login
     if (username === STATE.ADMIN_USERNAME && password === STATE.ADMIN_PASSWORD) {
         req.session.isAdmin = true;
-        return req.session.save(err => { // Wait for session save
+        return req.session.save(err => {
             if (err) {
                 console.error("Session save error (Admin):", err);
                 return res.send('Login Error. Please try clearing browser cache.');
@@ -255,13 +282,12 @@ app.post('/login', (req, res) => {
         });
     }
 
-    // 2. Check Team login
     for (const teamId in STATE.TEAMS) {
         const team = STATE.TEAMS[teamId];
         if (team.username === username && team.password === password) {
             req.session.teamId = team.id;
             
-            return req.session.save(err => { // Wait for session save
+            return req.session.save(err => {
                 if (err) {
                     console.error("Session save error (Team):", err);
                     return res.send('Login Error. Please try clearing browser cache.');
@@ -271,7 +297,6 @@ app.post('/login', (req, res) => {
         }
     }
 
-    // 3. Invalid credentials
     return res.send('Invalid credentials. <a href="/login_page">Try again</a>.');
 });
 
@@ -283,11 +308,179 @@ app.get('/admin_panel', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// ... (Rest of Admin CRUD and Socket.IO handlers omitted for brevity, but they are included in your full file)
-// Note: Ensure the remaining portion of your server.js is intact from the previous step.
+// Admin Action POST Handler (Handles START/RESET)
+app.post('/admin_action', (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).send("Unauthorized Action.");
+    
+    const action = req.body.action;
+    
+    if (action === 'set_duration') {
+        const durationMinutes = parseInt(req.body.duration_minutes);
+        if (durationMinutes > 0 && !STATE.AUCTION_ACTIVE) {
+            STATE.AUCTION_DURATION_SECONDS = durationMinutes * 60;
+            saveState();
+        }
+    } else if (action === 'start_auction' && !STATE.AUCTION_ACTIVE) {
+        startTimer();
+    } else if (action === 'reset_all') {
+        if (Object.keys(STATE.ASSET_CATALOG).length > 0 && STATE.TEAMS) {
+            STATE.GAME_HISTORY.push({
+                gameId: STATE.LIVE_GAME_ID,
+                date: new Date().toISOString(),
+                duration: STATE.AUCTION_DURATION_SECONDS,
+                assets: JSON.parse(JSON.stringify(STATE.ASSET_CATALOG)),
+                teams: JSON.parse(JSON.stringify(STATE.TEAMS))
+            });
+            STATE.LIVE_GAME_ID++;
+        }
+        resetLiveGameState();
+    }
+    
+    // Redirect back to the Admin Panel (this fixes the "Cannot POST" error)
+    res.redirect('/admin_panel');
+});
+
+// --- REST API for Admin CRUD ---
+
+app.get('/api/admin/state', (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
+    res.json({
+        assets: STATE.ASSET_CATALOG,
+        teams: STATE.TEAMS,
+        history: STATE.GAME_HISTORY,
+        duration: STATE.AUCTION_DURATION_SECONDS / 60,
+        active: STATE.AUCTION_ACTIVE
+    });
+});
+
+app.post('/api/admin/asset', (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
+    const { id, name, category, min_bid, quantity, action } = req.body;
+    const bid = parseInt(min_bid);
+    const qty = parseInt(quantity);
+    
+    if (action === 'add') {
+        const newId = uuidv4();
+        STATE.ASSET_CATALOG[newId] = { 
+            id: newId, name, category, min_bid: bid, quantity: qty,
+            current_bids: {}, winner: null, final_price: 0, winning_pool: []
+        };
+    } else if (action === 'update' && STATE.ASSET_CATALOG[id]) {
+        STATE.ASSET_CATALOG[id].name = name;
+        STATE.ASSET_CATALOG[id].category = category;
+        STATE.ASSET_CATALOG[id].min_bid = bid;
+        STATE.ASSET_CATALOG[id].quantity = qty;
+    } else if (action === 'delete' && STATE.ASSET_CATALOG[id]) {
+        delete STATE.ASSET_CATALOG[id];
+    } else {
+        return res.status(400).json({ error: "Invalid action or ID." });
+    }
+    
+    saveState();
+    res.json({ success: true, assets: STATE.ASSET_CATALOG });
+});
+
+app.post('/api/admin/team', (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
+    const { id, name, username, password, action } = req.body;
+    
+    if (action === 'add') {
+        const newId = uuidv4();
+        STATE.TEAMS[newId] = { id: newId, name, username, password, vc: 500000, assets_won: [] };
+    } else if (action === 'update' && STATE.TEAMS[id]) {
+        STATE.TEAMS[id].name = name;
+        STATE.TEAMS[id].username = username;
+        STATE.TEAMS[id].password = password;
+    } else if (action === 'delete' && STATE.TEAMS[id]) {
+        delete STATE.TEAMS[id];
+    } else {
+        return res.status(400).json({ error: "Invalid action or ID." });
+    }
+    
+    saveState();
+    res.json({ success: true, teams: STATE.TEAMS });
+});
+
+
+// --- Socket.IO Handlers (Real-time) ---
+
+participantNsp.on('connection', (socket) => {
+    const teamId = socket.request.session.teamId;
+    if (!teamId || !STATE.TEAMS[teamId]) {
+        socket.disconnect(true);
+        return;
+    }
+
+    socket.emit('initial_state', {
+        teamId: teamId,
+        teamData: STATE.TEAMS[teamId],
+        assets: STATE.ASSET_CATALOG, 
+        active: STATE.AUCTION_ACTIVE, 
+        endTime: STATE.AUCTION_END_TIME
+    });
+    
+    socket.on('place_bid', (data) => {
+        if (!STATE.AUCTION_ACTIVE) {
+            socket.emit('bid_response', { success: false, message: 'Auction is not active.' });
+            return;
+        }
+
+        const { assetId, bidAmount } = data;
+        const bid = parseInt(bidAmount);
+        const asset = STATE.ASSET_CATALOG[assetId];
+        const team = STATE.TEAMS[teamId];
+
+        if (!asset || !team) { return; }
+
+        if (bid < asset.min_bid) {
+            socket.emit('bid_response', { success: false, message: `Bid must be at least $${asset.min_bid.toLocaleString()} VC (per unit).` });
+            return;
+        }
+        
+        // Check if the team can afford the bid *for one unit*
+        if (bid > team.vc) {
+             socket.emit('bid_response', { success: false, message: `Bid of $${bid.toLocaleString()} VC exceeds your current VC balance.` });
+             return;
+        }
+        
+        // Store the sealed bid (price per unit)
+        asset.current_bids[teamId] = bid;
+        saveState();
+
+        socket.emit('bid_response', { 
+            success: true, 
+            message: `Bid of ${formatVC(bid)} recorded for ${asset.name} (per unit).`,
+            assetId: assetId, 
+            newBid: bid 
+        });
+        
+        adminNsp.emit('admin_update_bids', { [assetId]: asset });
+    });
+});
+
+adminNsp.on('connection', (socket) => {
+    
+    socket.on('force_stop_auction', () => {
+        if (!STATE.AUCTION_ACTIVE) {
+            socket.emit('admin_action_response', { success: false, message: 'Auction is already stopped or finished.' });
+            return;
+        }
+        
+        STATE.AUCTION_END_TIME = Date.now() - 1000; 
+        STATE.AUCTION_ACTIVE = false;
+        
+        resolveAuction(); 
+        socket.emit('admin_action_response', { success: true, message: 'Auction forcefully stopped and results resolved.' });
+    });
+});
 
 
 // --- Start Server ---
 server.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
+
+// Helper function for display
+function formatVC(amount) {
+    return `$${amount.toLocaleString()}`;
+}

@@ -87,7 +87,7 @@
         
         const socket = io();
 
-        const formatVC = (amount) => `$VC ${amount.toLocaleString()}`;
+        const formatVC = (amount) => `$${amount.toLocaleString()}`;
         
         function showSection(id) {
             document.getElementById('bidding-section').style.display = 'none';
@@ -113,8 +113,8 @@
             
             if (teamData.assets_won.length > 0) {
                 teamData.assets_won.forEach(asset => {
-                    MY_ASSETS_LIST_EL.innerHTML += `<li>${asset.name} - ${formatVC(asset.cost)}</li>`;
-                    totalCost += asset.cost;
+                    MY_ASSETS_LIST_EL.innerHTML += `<li>${asset.name} (x${asset.quantity}) - Cost: ${formatVC(asset.cost * asset.quantity)} (Price/Unit: ${formatVC(asset.cost)})</li>`;
+                    totalCost += (asset.cost * asset.quantity);
                 });
             } else {
                 MY_ASSETS_LIST_EL.innerHTML = '<li>No assets won yet. Bid now!</li>';
@@ -132,25 +132,35 @@
                 card.className = 'item-card';
                 
                 let bidControlsHTML = '';
+                
+                // --- Winning Pool Display ---
+                let winnerStatus = '';
+                if (!auctionActive && asset.winner) {
+                    winnerStatus = `<p style="margin-top: 10px; font-weight: bold; color: #FFC72C;">AUCTION RESULT:</p>`;
+                    
+                    if (asset.winner === 'MULTIPLE' && asset.winning_pool.includes(TEAM_ID)) {
+                        winnerStatus += `<p style="color: #00FF00;">🎉 YOU WON 1 UNIT at ${formatVC(asset.final_price)}!</p>`;
+                    } else if (asset.winner === 'MULTIPLE') {
+                        winnerStatus += `<p>Sold ${asset.quantity} units. Uniform Price: ${formatVC(asset.final_price)}</p>`;
+                    } else if (asset.winner === 'VOID (Budget Fail)') {
+                        winnerStatus += `<p style="color: orange;">VOID: Team over budget.</p>`;
+                    } else {
+                        winnerStatus += `<p>No units won.</p>`;
+                    }
+                }
+                
                 if (auctionActive) {
                      bidControlsHTML = `
-                        <label for="bid-${id}">Your Current Bid:</label>
+                        <p style="font-weight: bold;">Units Available: x${asset.quantity}</p>
+                        <label for="bid-${id}">Your Bid (Price per unit):</label>
                         <input type="number" id="bid-${id}" value="${teamBid}" min="${asset.min_bid}">
                         <button onclick="placeBid('${id}')">
                             ${teamBid > 0 ? 'Update Bid' : 'Place Bid'}
                         </button>
                         <div class="bid-status" id="status-${id}">
-                            ${teamBid > 0 ? `Bid recorded: ${formatVC(teamBid)}` : 'No bid recorded.'}
+                            ${teamBid > 0 ? `Current Bid/Unit: ${formatVC(teamBid)}` : 'No bid recorded.'}
                         </div>
                     `;
-                } else if (asset.winner) {
-                     const winnerText = asset.winner === TEAM_ID ? 
-                        `<span class="winner" style="color: #00FF00;">YOU WON!</span> for ${formatVC(asset.final_price)}` : 
-                        asset.winner === 'VOID (Budget Fail)' ?
-                        `<span style="color: orange; font-weight: bold;">VOID (Budget Fail)</span>` :
-                        `Won by ${asset.winner} for ${formatVC(asset.final_price)}`;
-                    
-                    bidControlsHTML = `<p style="color: #FFC72C; font-weight: bold;">AUCTION RESULT:</p><p>${winnerText}</p>`;
                 } else {
                     bidControlsHTML = `<div class="bid-status">Auction is CLOSED.</div>`;
                 }
@@ -158,9 +168,10 @@
 
                 card.innerHTML = `
                     <h3>${asset.name} (${asset.category})</h3>
-                    <p>Min Bid: ${formatVC(asset.min_bid)}</p>
+                    <p>Min Bid/Unit: ${formatVC(asset.min_bid)}</p>
                     <p>Description: Strategic value details for pitching.</p>
                     <div class="bid-section">${bidControlsHTML}</div>
+                    ${winnerStatus}
                 `;
                 ASSETS_DISPLAY_EL.appendChild(card);
             }
@@ -173,7 +184,7 @@
             if (!auctionActive) { return; }
 
             if (isNaN(bidAmount) || bidAmount < assetCatalog[assetId].min_bid) {
-                alert(`Bid for ${assetCatalog[assetId].name} must be a valid number and at least ${formatVC(assetCatalog[assetId].min_bid)}.`);
+                alert(`Bid for ${assetCatalog[assetId].name} must be a valid number and at least ${formatVC(assetCatalog[assetId].min_bid)} (per unit).`);
                 return;
             }
             
@@ -185,27 +196,15 @@
         
         // --- Socket.IO Event Handlers ---
         
-        // public/index.html (Inside the <script> block)
-
-// --- Socket.IO Event Handlers ---
-        
-socket.on('initial_state', (state) => {
-    // === AUTHENTICATION CHECK FIX ===
-    if (!state.teamId || !state.teamData) {
-        // If the server sends no ID or team data, force client-side logout/redirect
-        window.location.href = '/logout'; 
-        return;
-    }
-    // === END AUTH CHECK FIX ===
-
-    TEAM_ID = state.teamId;
-    updateTeamDisplay(state.teamData);
-    assetCatalog = state.assets;
-    auctionActive = state.active;
-    
-    renderAssetCards();
-    STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Review results and assets.';
-});
+        socket.on('initial_state', (state) => {
+            TEAM_ID = state.teamId;
+            updateTeamDisplay(state.teamData);
+            assetCatalog = state.assets;
+            auctionActive = state.active;
+            
+            renderAssetCards();
+            STATUS_MSG_EL.textContent = auctionActive ? 'Auction is LIVE! Place your sealed bids now.' : 'Auction is CLOSED. Review results and assets.';
+        });
 
         socket.on('timer_update', (data) => {
             const time_left = data.timeLeft;
@@ -233,7 +232,6 @@ socket.on('initial_state', (state) => {
         });
 
         socket.on('admin_update_teams', (teamsData) => {
-             // Find and update the current team's data
              if (teamsData[TEAM_ID]) {
                 updateTeamDisplay(teamsData[TEAM_ID]);
              }
