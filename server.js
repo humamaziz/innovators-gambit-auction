@@ -251,20 +251,38 @@ app.get('/logout', (req, res) => {
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
+    // 1. Check Admin login
     if (username === STATE.ADMIN_USERNAME && password === STATE.ADMIN_PASSWORD) {
         req.session.isAdmin = true;
-        return res.redirect('/admin_panel');
+        // Save session and redirect ONLY after save is complete
+        return req.session.save(err => {
+            if (err) {
+                console.error("Session save error (Admin):", err);
+                return res.send('Login Error. Please try clearing browser cache.');
+            }
+            res.redirect('/admin_panel');
+        });
     }
 
+    // 2. Check Team login
     for (const teamId in STATE.TEAMS) {
         const team = STATE.TEAMS[teamId];
         if (team.username === username && team.password === password) {
             req.session.teamId = team.id;
-            return res.redirect('/');
+            
+            // Save session and redirect ONLY after save is complete
+            return req.session.save(err => {
+                if (err) {
+                    console.error("Session save error (Team):", err);
+                    return res.send('Login Error. Please try clearing browser cache.');
+                }
+                res.redirect('/');
+            });
         }
     }
 
-    return res.send('Invalid credentials. <a href="/">Try again</a>.');
+    // 3. Invalid credentials
+    return res.send('Invalid credentials. <a href="/login_page">Try again</a>.');
 });
 
 // Admin Panel Routes (Protected)
