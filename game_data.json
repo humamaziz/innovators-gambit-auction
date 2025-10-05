@@ -1,0 +1,22 @@
+
+{
+  "ASSET_CATALOG": {},
+  "TEAMS": {
+    "admin_placeholder": {
+      "id": "admin_placeholder",
+      "name": "Admin Team",
+      "username": "mohdhumama@gmail.com",
+      "password": "Humam@2004",
+      "vc": 500000,
+      "starting_vc": 500000,
+      "assets_won": []
+    }
+  },
+  "AUCTION_ACTIVE": false,
+  "AUCTION_END_TIME": null,
+  "AUCTION_DURATION_SECONDS": 1800,
+  "LIVE_GAME_ID": 1,
+  "GAME_HISTORY": [],
+  "ADMIN_USERNAME": "mohdhumama@gmail.com",
+  "ADMIN_PASSWORD": "Humam@2004"
+}

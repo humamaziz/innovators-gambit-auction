@@ -211,6 +211,20 @@
         
         // FIX: The socket connection should be clean now
         const socket = io();
+        document.addEventListener('DOMContentLoaded', () => {
+    // Force a small delay to ensure the server's session middleware runs first
+    setTimeout(() => {
+        // If the socket isn't connected yet, explicitly call for the initial data.
+        if (socket.connected) {
+             console.log("Socket connected, waiting for initial_state...");
+        } else {
+             // Attempt to connect/reconnect and ask for state
+             socket.connect(); 
+        }
+    }, 500); // 500ms delay
+
+    showSection('bidding');
+});
 
         const formatVC = (amount) => `$${amount.toLocaleString()}`;
         
