@@ -14,18 +14,19 @@ const DATA_FILE = path.join(__dirname, 'game_data.json');
 const SECRET_KEY = process.env.SESSION_SECRET || 'a_very_long_secret_key_for_gambit_auction_2025';
 
 // --- CRITICAL PROXY & TRUST SETTING ---
+// This tells Express to trust the proxy (Render) for secure cookies.
 app.set('trust proxy', 1); 
 
 // --- Configure Middleware (ORDER IS CRUCIAL) ---
 
-// 1. Configure Session Middleware (with final stable cookie config)
+// 1. Configure Session Middleware
 app.use(session({
     secret: SECRET_KEY,
     resave: false,
     saveUninitialized: false, 
     cookie: { 
-        secure: true,       // MUST be true for HTTPS (Render)
-        sameSite: 'none',   // MUST be 'none' for proxy environments
+        secure: true,       // Must be true for HTTPS (Render)
+        sameSite: 'none',   // Must be 'none' for proxy environments
         path: '/'           // Ensures cookie is valid across all routes
     }
 }));
@@ -41,6 +42,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- Global State & Persistence Functions ---
 let STATE = loadState(); 
 let AUCTION_TIMER_INTERVAL = null;
+let LIVE_BID_LOG = []; // Stores real-time bid history for Admin view
 
 const io = socketio(server);
 io.use((socket, next) => {
@@ -129,19 +131,18 @@ function resolveAuction() {
     }
     STATE.AUCTION_ACTIVE = false;
     
-    const winningBids = {}; // { teamId: [{ assetId, price, quantity_won }] }
+    const winningBids = {};
 
     // 2. Determine winners for each item (Multi-Unit Logic)
     for (const assetId in STATE.ASSET_CATALOG) {
         const asset = STATE.ASSET_CATALOG[assetId];
         
-        // Collect all valid bids (filter by min_bid and team VC)
+        // Collect all valid bids
         let validBids = [];
         for (const teamId in asset.current_bids) {
             const bid = asset.current_bids[teamId];
             const team = STATE.TEAMS[teamId];
             
-            // NOTE: Bid is always for ONE unit (as per feature request)
             if (bid >= asset.min_bid && team && bid <= team.vc) {
                 validBids.push({ teamId, bid, name: team.name });
             }
@@ -152,7 +153,7 @@ function resolveAuction() {
         // Sort bids from highest to lowest
         validBids.sort((a, b) => b.bid - a.bid);
         
-        // Determine the winning pool (Top N bidders, limited by availableQuantity)
+        // Determine the winning pool (Top N bidders)
         const winningBidders = validBids.slice(0, availableQuantity);
 
         if (winningBidders.length > 0) {
@@ -168,7 +169,6 @@ function resolveAuction() {
                 if (!winningBids[winner.teamId]) {
                     winningBids[winner.teamId] = [];
                 }
-                // Each winner receives 1 unit at the uniform price
                 winningBids[winner.teamId].push({ 
                     assetId: assetId, 
                     price: winningPricePerUnit,
@@ -185,12 +185,10 @@ function resolveAuction() {
     // 3. Process winning bids and deduct VC
     for (const teamId in winningBids) {
         const team = STATE.TEAMS[teamId];
-        // Calculate cost based on price * quantity_won
         const totalCost = winningBids[teamId].reduce((sum, win) => sum + (win.price * win.quantity_won), 0);
         
         if (totalCost <= team.vc) {
             team.vc -= totalCost;
-            // Award assets with final cost
             winningBids[teamId].forEach(win => {
                 team.assets_won.push({
                     name: STATE.ASSET_CATALOG[win.assetId].name,
@@ -199,15 +197,18 @@ function resolveAuction() {
                 });
             });
         } else {
-            // VOID Logic: Team loses all wins if total cost exceeds budget
+            // VOID Logic
             for (const win of winningBids[teamId]) {
                 STATE.ASSET_CATALOG[win.assetId].winner = "VOID (Budget Fail)";
                 STATE.ASSET_CATALOG[win.assetId].final_price = 0;
-                STATE.ASSET_CATALOG[win.assetId].winning_pool = []; // Clear pool on void
+                STATE.ASSET_CATALOG[win.assetId].winning_pool = []; 
             }
         }
     }
     
+    // Clear log when resolving
+    LIVE_BID_LOG = []; 
+
     saveState();
     participantNsp.emit('auction_finished', STATE.ASSET_CATALOG);
     adminNsp.emit('auction_finished', STATE.ASSET_CATALOG);
@@ -222,15 +223,18 @@ function resetLiveGameState() {
     STATE.AUCTION_ACTIVE = false;
     STATE.AUCTION_END_TIME = null;
     
+    LIVE_BID_LOG = []; 
+
     for (const id in STATE.ASSET_CATALOG) {
         STATE.ASSET_CATALOG[id].current_bids = {};
         STATE.ASSET_CATALOG[id].winner = null;
         STATE.ASSET_CATALOG[id].final_price = 0;
-        STATE.ASSET_CATALOG[id].winning_pool = []; // Reset pool
+        STATE.ASSET_CATALOG[id].winning_pool = []; 
     }
     
     for (const id in STATE.TEAMS) {
-        STATE.TEAMS[id].vc = 500000;
+        // Reset VC to starting VC
+        STATE.TEAMS[id].vc = STATE.TEAMS[id].starting_vc || 500000;
         STATE.TEAMS[id].assets_won = [];
     }
 
@@ -322,6 +326,8 @@ app.post('/admin_action', (req, res) => {
         }
     } else if (action === 'start_auction' && !STATE.AUCTION_ACTIVE) {
         startTimer();
+        adminNsp.emit('system_message', { type: 'success', text: 'Auction Started Successfully.' });
+
     } else if (action === 'reset_all') {
         if (Object.keys(STATE.ASSET_CATALOG).length > 0 && STATE.TEAMS) {
             STATE.GAME_HISTORY.push({
@@ -336,7 +342,6 @@ app.post('/admin_action', (req, res) => {
         resetLiveGameState();
     }
     
-    // Redirect back to the Admin Panel (this fixes the "Cannot POST" error)
     res.redirect('/admin_panel');
 });
 
@@ -352,6 +357,12 @@ app.get('/api/admin/state', (req, res) => {
         active: STATE.AUCTION_ACTIVE
     });
 });
+
+app.get('/api/admin/logs', (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
+    res.json(LIVE_BID_LOG.reverse()); // Send reversed log for newest first
+});
+
 
 app.post('/api/admin/asset', (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
@@ -382,15 +393,17 @@ app.post('/api/admin/asset', (req, res) => {
 
 app.post('/api/admin/team', (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: "Forbidden" });
-    const { id, name, username, password, action } = req.body;
-    
+    const { id, name, username, password, starting_vc, action } = req.body;
+    const initialVC = parseInt(starting_vc);
+
     if (action === 'add') {
         const newId = uuidv4();
-        STATE.TEAMS[newId] = { id: newId, name, username, password, vc: 500000, assets_won: [] };
+        STATE.TEAMS[newId] = { id: newId, name, username, password, vc: initialVC, starting_vc: initialVC, assets_won: [] };
     } else if (action === 'update' && STATE.TEAMS[id]) {
         STATE.TEAMS[id].name = name;
         STATE.TEAMS[id].username = username;
         STATE.TEAMS[id].password = password;
+        STATE.TEAMS[id].starting_vc = initialVC;
     } else if (action === 'delete' && STATE.TEAMS[id]) {
         delete STATE.TEAMS[id];
     } else {
@@ -411,6 +424,7 @@ participantNsp.on('connection', (socket) => {
         return;
     }
 
+    // FIX: Send initial state immediately upon successful socket connection
     socket.emit('initial_state', {
         teamId: teamId,
         teamData: STATE.TEAMS[teamId],
@@ -437,24 +451,32 @@ participantNsp.on('connection', (socket) => {
             return;
         }
         
-        // Check if the team can afford the bid *for one unit*
         if (bid > team.vc) {
              socket.emit('bid_response', { success: false, message: `Bid of $${bid.toLocaleString()} VC exceeds your current VC balance.` });
              return;
         }
-        
-        // Store the sealed bid (price per unit)
+
         asset.current_bids[teamId] = bid;
         saveState();
 
+        // NEW: Add entry to log
+        LIVE_BID_LOG.push({
+            time: new Date().toLocaleTimeString(),
+            teamName: team.name,
+            assetName: asset.name,
+            bidAmount: bid,
+            type: 'bid'
+        });
+
         socket.emit('bid_response', { 
             success: true, 
-            message: `Bid of ${formatVC(bid)} recorded for ${asset.name} (per unit).`,
+            message: `Bid of $${bid.toLocaleString()} recorded for ${asset.name} (per unit).`,
             assetId: assetId, 
             newBid: bid 
         });
         
         adminNsp.emit('admin_update_bids', { [assetId]: asset });
+        adminNsp.emit('new_log_entry', LIVE_BID_LOG[LIVE_BID_LOG.length - 1]);
     });
 });
 

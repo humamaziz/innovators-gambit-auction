@@ -1,4 +1,6 @@
 /* public/style.css */
+/* Base styles - Primary styling moved to HTML <style> block for coherence */
+
 :root {
     --gold: #FFC72C;
     --dark-blue: #0A192F;
@@ -9,85 +11,11 @@
 
 body {
     font-family: var(--font-stack);
-    background-color: var(--dark-blue);
-    color: var(--light-gray);
-    margin: 0;
-    padding: 0;
+    /* Color variables are now used in inline styles for dynamic rendering */
 }
 
-.gold-rush-theme {
-    background-color: var(--dark-blue);
-    border-bottom: 4px solid var(--gold);
-    padding: 20px 40px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.event-title {
-    color: var(--gold);
-    margin: 0;
-    font-size: 1.8em;
-}
-
-#team-info {
-    font-size: 1.2em;
-    font-weight: bold;
-}
-
-.item-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
-    padding: 30px;
-}
-
-.item-card {
-    background-color: #112240;
-    padding: 30px;
-    border-radius: 10px;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
-}
-
-.item-card h3 {
-    color: var(--gold);
-    border-bottom: 2px solid var(--accent-red);
-    padding-bottom: 10px;
-    margin-top: 0;
-}
-
-.item-card input[type="number"] { 
-    width: 100%; 
-    padding: 10px; 
-    margin: 10px 0; 
-    box-sizing: border-box; 
-    background-color: #0A192F; 
-    color: #CCD6F6; 
-    border: 1px solid #CCD6F6; 
-    border-radius: 4px; 
-}
-
-.item-card button { 
-    background-color: var(--accent-red); 
-    color: white; 
-    padding: 10px; 
-    border: none; 
-    border-radius: 4px; 
-    cursor: pointer; 
-    width: 100%; 
-    font-weight: bold;
-    transition: background-color 0.3s;
-}
-.item-card button:hover {
-    background-color: #c4384c;
-}
-.item-card button:disabled {
-    background-color: #555;
-    cursor: not-allowed;
-}
-
-.bid-status { 
-    margin-top: 10px; 
-    font-size: 0.9em; 
-    font-style: italic;
+/* Ensure no default styles interfere */
+a {
+    text-decoration: none;
+    color: inherit;
 }

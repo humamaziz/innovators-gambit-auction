@@ -7,17 +7,40 @@
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
     <style>
-        .controls { margin-bottom: 30px; padding: 20px; border-radius: 8px; background-color: #112240; }
-        .controls button { padding: 10px 15px; margin-right: 10px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
-        #start-btn { background-color: #00FF00; }
-        #stop-btn { background-color: orange; color: white; }
-        #reset-btn { background-color: #FF0000; color: white; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #0A192F; padding: 10px; text-align: left; background-color: #112240; }
-        th { background-color: #FFC72C; color: #0A192F; }
-        .tab-content { border: 1px solid #112240; padding: 20px; margin-top: 10px; background-color: #112240; border-radius: 8px; }
-        .crud-form input, .crud-form select { margin-right: 10px; padding: 8px; border: 1px solid #CCD6F6; background-color: #0A192F; color: #CCD6F6; border-radius: 4px; }
-        .crud-form button { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; }
+        /* Admin UI/UX Overhaul */
+        :root {
+            --gold: #FFC72C;
+            --dark-blue: #0A192F;
+            --medium-blue: #112240;
+            --light-gray: #CCD6F6;
+            --accent-red: #E84A5F;
+        }
+        body { background-color: var(--dark-blue); color: var(--light-gray); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .controls { background-color: var(--medium-blue); padding: 25px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); margin-bottom: 30px; }
+        .controls button, .crud-form button { 
+            padding: 10px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; 
+        }
+        #start-btn { background: #00FF00; color: var(--dark-blue); }
+        #stop-btn { background: orange; color: white; }
+        #reset-btn { background: var(--accent-red); color: white; }
+        
+        /* Input Styling */
+        .controls input, .crud-form input, .crud-form select {
+            padding: 8px; border-radius: 4px; border: 1px solid var(--light-gray); background-color: var(--dark-blue); color: var(--light-gray);
+            margin-right: 10px;
+        }
+
+        /* Table Styling */
+        table { border-collapse: separate; border-spacing: 0 5px; width: 100%; }
+        th, td { padding: 12px; text-align: left; background-color: #112240; border: none; }
+        th { background-color: var(--gold); color: var(--dark-blue); font-weight: bold; }
+        tr:nth-child(even) td { background-color: #0A192F; }
+
+        /* Log Styling */
+        #log-feed { max-height: 400px; overflow-y: auto; padding: 10px; background-color: var(--dark-blue); border-radius: 5px; }
+        .log-entry { margin-bottom: 5px; padding: 8px; border-left: 3px solid var(--gold); background-color: #112240; font-size: 0.9em; }
+        .log-entry.bid { border-color: #00FF00; }
+        .system-message { color: var(--accent-red); font-weight: bold; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -29,7 +52,7 @@
 
     <div class="controls">
         <h2>Auction Controls</h2>
-        <div style="margin-bottom: 15px;">
+        <div style="margin-bottom: 15px; display: flex; align-items: center;">
             <label for="duration-input" style="margin-right: 10px;">Auction Duration (Minutes):</label>
             <input type="number" id="duration-input" value="30" min="1" style="width: 80px;" onchange="updateDuration()">
         </div>
@@ -45,72 +68,83 @@
             <input type="hidden" name="action" value="reset_all">
             <button type="submit" id="reset-btn">RESET ALL & SAVE GAME</button>
         </form>
-        <p style="margin-top: 15px; font-size: 0.9em; color: #CCD6F6;">* 'Reset All' saves the current game as history, clears assets, and resets team VC for a new round.</p>
+        <p class="system-message" id="admin-notifications"></p>
     </div>
 
-    <div class="tabs" style="margin-bottom: 20px;">
+    <div class="tabs" style="padding: 0 40px;">
         <button class="active" onclick="showAdminTab('monitor-tab', this)">Live Monitor</button>
+        <button onclick="showAdminTab('logs-tab', this)">Live Bid Log</button>
         <button onclick="showAdminTab('assets-tab', this)">Asset Management</button>
         <button onclick="showAdminTab('teams-tab', this)">Team Management</button>
         <button onclick="showAdminTab('history-tab', this)">Game History</button>
     </div>
 
-    <div id="monitor-tab" class="tab-content">
-        <h2>Live Bid Monitor</h2>
-        <table id="asset-monitor">
-            <thead><tr><th>Asset Name</th><th>Quantity</th><th>Min Bid/Unit</th><th>Total Bidders</th><th>Highest Bid</th><th>Winner (Final Price)</th></tr></thead>
-            <tbody></tbody>
-        </table>
+    <div style="padding: 20px 40px;">
+
+        <div id="monitor-tab" class="tab-content" style="display: block;">
+            <h2>Asset Status</h2>
+            <table id="asset-monitor">
+                <thead><tr><th>Asset Name</th><th>Quantity</th><th>Min Bid/Unit</th><th>Bidders</th><th>Highest Bid</th><th>Winner/Price</th></tr></thead>
+                <tbody></tbody>
+            </table>
+            
+            <h2 style="margin-top: 30px;">Team Status</h2>
+            <table id="team-status-table">
+                <thead><tr><th>ID</th><th>Name</th><th>VC Balance</th><th>Assets Won</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div id="logs-tab" class="tab-content" style="display: none;">
+            <h2>Real-Time Bid Log</h2>
+            <div id="log-feed">
+                </div>
+        </div>
+
+        <div id="assets-tab" class="tab-content" style="display: none;">
+            <h2>Add New Asset</h2>
+            <form id="add-asset-form" class="crud-form" onsubmit="handleAssetSubmit(event, 'add')">
+                <input type="text" name="name" placeholder="Name" required>
+                <select name="category" required>
+                    <option value="" disabled selected>Select Category</option>
+                    <option value="Tech">Tech</option>
+                    <option value="Marketing">Marketing</option>
+                    <option value="Operations">Operations</option>
+                    <option value="Legal">Legal/Mentorship</option>
+                </select>
+                <input type="number" name="min_bid" placeholder="Price/Unit (VC)" required min="10000" style="width: 120px;">
+                <input type="number" name="quantity" placeholder="Quantity (N)" required min="1" style="width: 120px;">
+                <button type="submit" style="background-color: #00FF00;">Add Asset</button>
+            </form>
+            <h2 style="margin-top: 20px;">Current Assets</h2>
+            <table id="current-assets-table">
+                <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Min Bid/Unit</th><th>Quantity</th><th>Actions</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div id="teams-tab" class="tab-content" style="display: none;">
+            <h2>Add New Team</h2>
+            <form id="add-team-form" class="crud-form" onsubmit="handleTeamSubmit(event, 'add')">
+                <input type="text" name="name" placeholder="Team Name" required>
+                <input type="text" name="username" placeholder="Username" required style="width: 100px;">
+                <input type="text" name="password" placeholder="Password" required style="width: 100px;">
+                <input type="number" name="starting_vc" placeholder="Starting VC (e.g., 500000)" value="500000" min="100000" required style="width: 150px;">
+                <button type="submit" style="background-color: #00FF00;">Add Team</button>
+            </form>
+            <h2 style="margin-top: 20px;">Registered Teams (Login: Username/Password)</h2>
+            <table id="current-teams-table">
+                <thead><tr><th>ID</th><th>Name</th><th>VC Start</th><th>Username</th><th>Password</th><th>Actions</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
         
-        <h2>Team Status</h2>
-        <table id="team-status-table">
-            <thead><tr><th>ID</th><th>Name</th><th>VC Balance</th><th>Assets Won</th></tr></thead>
-            <tbody></tbody>
-        </table>
-    </div>
-
-    <div id="assets-tab" class="tab-content" style="display: none;">
-        <h2>Add New Asset</h2>
-        <form id="add-asset-form" class="crud-form" onsubmit="handleAssetSubmit(event, 'add')">
-            <input type="text" name="name" placeholder="Name" required>
-            <select name="category" required>
-                <option value="" disabled selected>Select Category</option>
-                <option value="Tech">Tech</option>
-                <option value="Marketing">Marketing</option>
-                <option value="Operations">Operations</option>
-                <option value="Legal">Legal/Mentorship</option>
-            </select>
-            <input type="number" name="min_bid" placeholder="Price/Unit (VC)" required min="10000" style="width: 120px;">
-            <input type="number" name="quantity" placeholder="Quantity (N)" required min="1" style="width: 120px;">
-            <button type="submit" style="background-color: #00FF00;">Add Asset</button>
-        </form>
-        <h2 style="margin-top: 20px;">Current Assets</h2>
-        <table id="current-assets-table">
-            <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Min Bid/Unit</th><th>Quantity</th><th>Actions</th></tr></thead>
-            <tbody></tbody>
-        </table>
-    </div>
-
-    <div id="teams-tab" class="tab-content" style="display: none;">
-        <h2>Add New Team</h2>
-        <form id="add-team-form" class="crud-form" onsubmit="handleTeamSubmit(event, 'add')">
-            <input type="text" name="name" placeholder="Team Name" required>
-            <input type="text" name="username" placeholder="Username" required style="width: 100px;">
-            <input type="text" name="password" placeholder="Password" required style="width: 100px;">
-            <button type="submit" style="background-color: #00FF00;">Add Team</button>
-        </form>
-        <h2 style="margin-top: 20px;">Registered Teams (Login: Username/Password)</h2>
-        <table id="current-teams-table">
-            <thead><tr><th>ID</th><th>Name</th><th>VC Start</th><th>Username</th><th>Password</th><th>Actions</th></tr></thead>
-            <tbody></tbody>
-        </table>
-    </div>
-    
-    <div id="history-tab" class="tab-content" style="display: none;">
-        <h2>Game History</h2>
-        <ul id="history-list">
-            <li>Loading...</li>
-        </ul>
+        <div id="history-tab" class="tab-content" style="display: none;">
+            <h2>Game History</h2>
+            <ul id="history-list">
+                <li>Loading...</li>
+            </ul>
+        </div>
     </div>
 
 
@@ -127,6 +161,9 @@
         const ASSET_CRUD_BODY = document.querySelector('#current-assets-table tbody');
         const TEAM_CRUD_BODY = document.querySelector('#current-teams-table tbody');
         const HISTORY_LIST = document.getElementById('history-list');
+        const LOG_FEED = document.getElementById('log-feed');
+        const ADMIN_NOTIFICATIONS = document.getElementById('admin-notifications');
+
 
         let assetCatalog = {};
         let teams = {};
@@ -145,6 +182,14 @@
             STOP_BTN.disabled = !isActive;
             DURATION_INPUT.disabled = isActive;
             AUCTION_STATUS_EL.textContent = isActive ? 'LIVE' : 'CLOSED';
+        }
+        
+        function addLogEntry(entry) {
+            const entryDiv = document.createElement('div');
+            entryDiv.className = `log-entry ${entry.type}`;
+            entryDiv.innerHTML = `[${entry.time}] ${entry.teamName} bid ${formatVC(entry.bidAmount)} on ${entry.assetName}`;
+            
+            LOG_FEED.prepend(entryDiv);
         }
 
         function renderHistory(history) {
@@ -235,7 +280,7 @@
                 row.innerHTML = `
                     <td>${id.substring(0, 4)}...</td>
                     <td><input type="text" id="team-name-${id}" value="${team.name}" style="width:100px;"></td>
-                    <td>${formatVC(500000)}</td>
+                    <td><input type="number" id="team-vc-${id}" value="${team.starting_vc || 500000}" min="100000" style="width:90px;"></td>
                     <td><input type="text" id="team-user-${id}" value="${team.username}" style="width:80px;"></td>
                     <td><input type="text" id="team-pass-${id}" value="${team.password}" style="width:80px;"></td>
                     <td>
@@ -261,13 +306,16 @@
             renderAssetCRUD();
             renderTeamCRUD();
             renderHistory(state.history);
+
+            // Fetch Log History
+            const logResponse = await fetch('/api/admin/logs');
+            const logs = await logResponse.json();
+            LOG_FEED.innerHTML = ''; // Clear existing log
+            logs.forEach(addLogEntry); 
         }
 
         async function handleAssetSubmit(event, action, id = null) {
-            // CRITICAL FIX: Stop default form submission for CRUD forms
-            if (event && event.preventDefault) {
-                event.preventDefault(); 
-            }
+            if (event && event.preventDefault) { event.preventDefault(); }
             
             let data = { action: action, id: id };
             
@@ -280,7 +328,7 @@
                  data.name = document.getElementById(`asset-name-${id}`).value;
                  data.category = document.getElementById(`asset-cat-${id}`).value;
                  data.min_bid = document.getElementById(`asset-bid-${id}`).value;
-                 data.quantity = document.getElementById(`asset-qty-${id}`).value; // NEW FIELD
+                 data.quantity = document.getElementById(`asset-qty-${id}`).value; 
             } else if (action === 'delete' && !confirm('Are you sure you want to delete this asset?')) {
                  return;
             }
@@ -301,10 +349,7 @@
         window.handleAssetSubmit = handleAssetSubmit;
 
         async function handleTeamSubmit(event, action, id = null) {
-            // CRITICAL FIX: Stop default form submission for CRUD forms
-            if (event && event.preventDefault) {
-                event.preventDefault(); 
-            }
+            if (event && event.preventDefault) { event.preventDefault(); }
             
             let data = { action: action, id: id };
             
@@ -312,8 +357,10 @@
                  data.name = document.querySelector('#add-team-form input[name="name"]').value;
                  data.username = document.querySelector('#add-team-form input[name="username"]').value;
                  data.password = document.querySelector('#add-team-form input[name="password"]').value;
+                 data.starting_vc = document.querySelector('#add-team-form input[name="starting_vc"]').value;
             } else if (action === 'update') {
                  data.name = document.getElementById(`team-name-${id}`).value;
+                 data.starting_vc = document.getElementById(`team-vc-${id}`).value;
                  data.username = document.getElementById(`team-user-${id}`).value;
                  data.password = document.getElementById(`team-pass-${id}`).value;
             } else if (action === 'delete' && !confirm('Are you sure you want to delete this team?')) {
@@ -354,6 +401,7 @@
             }
         };
 
+        // --- Socket.IO Handlers for Real-Time Updates ---
         socket.on('timer_update', (data) => {
             const time_left = data.timeLeft;
             const minutes = Math.floor(time_left / 60);
@@ -368,8 +416,16 @@
             renderAssetMonitor();
         });
 
+        socket.on('new_log_entry', (entry) => {
+            addLogEntry(entry);
+            // Flash a notification
+            ADMIN_NOTIFICATIONS.textContent = `New Bid: ${entry.teamName} on ${entry.assetName}`;
+            setTimeout(() => { ADMIN_NOTIFICATIONS.textContent = ''; }, 3000);
+        });
+
         socket.on('auction_start', (data) => {
             updateButtonStates(true);
+            ADMIN_NOTIFICATIONS.textContent = 'AUCTION IS LIVE! Accepting bids now.';
         });
         
         socket.on('auction_finished', (assetResults) => {
@@ -377,6 +433,7 @@
             updateButtonStates(false);
             assetCatalog = assetResults;
             renderAssetMonitor();
+            ADMIN_NOTIFICATIONS.textContent = 'AUCTION RESOLVED. Check final winners.';
         });
 
         socket.on('admin_update_teams', (teamsData) => {
@@ -386,13 +443,7 @@
 
         socket.on('auction_reset', () => {
              fetchAdminState();
-        });
-
-        socket.on('admin_action_response', (data) => {
-             if (!data.success) {
-                 alert(data.message);
-                 updateButtonStates(true);
-             }
+             ADMIN_NOTIFICATIONS.textContent = 'Game reset successful.';
         });
 
         document.addEventListener('DOMContentLoaded', () => {
